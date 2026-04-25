@@ -9,8 +9,9 @@ from bot.db.models import Order, Plan, Service
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            ["🛍 Catálogo", "💰 Mi saldo"],
-            ["📦 Mis pedidos", "❓ FAQ"],
+            ["🛍 Catálogo", "🧭 Cómo comprar"],
+            ["💰 Mi saldo", "📦 Mis pedidos"],
+            ["🎁 Referidos", "❓ FAQ"],
             ["💬 Soporte", "ℹ️ Ayuda"],
         ],
         resize_keyboard=True,

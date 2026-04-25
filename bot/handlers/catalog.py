@@ -5,7 +5,6 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.db.database import session_scope
-from bot.db.models import Order
 from bot.keyboards import plan_detail_keyboard, plans_keyboard, services_keyboard
 from bot.services.catalog_service import (
     get_plan,
@@ -14,8 +13,8 @@ from bot.services.catalog_service import (
     list_active_services,
     stock_count_for_plans,
 )
-from bot.services.runtime_config_service import get_promo
 from bot.services.order_service import get_or_create_user
+from bot.services.runtime_config_service import get_promo
 from bot.services.waitlist_service import add_entry as waitlist_add
 from config import Settings
 
@@ -31,15 +30,24 @@ async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     promo = get_promo()
     intro = ""
     if promo:
-        intro = f"📣 *{promo}*\n\n"
-    text = f"{intro}🛍 *Catálogo de servicios*\n\nElige una plataforma:"
+        intro = f"📣 *Promo activa*\n{promo}\n\n"
+    text = (
+        f"{intro}🛍 *Catálogo de servicios*\n\n"
+        "Explora nuestras plataformas disponibles y entra al servicio que quieras comprar."
+    )
     if update.callback_query is not None:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
             text, reply_markup=markup, parse_mode="Markdown"
         )
     elif update.message is not None:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+        await update.message.reply_text(
+            text, reply_markup=markup, parse_mode="Markdown"
+        )
+
+
+async def back_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_catalog(update, context)
 
 
 async def cb_waitlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -67,7 +75,7 @@ async def cb_waitlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if entry is None:
         await query.edit_message_text(
             f"🔔 Ya estabas en la lista de espera de *{plan_label}*. "
-            "Te avisaré cuando regrese el stock.",
+            "Te avisaré cuando vuelva el stock.",
             parse_mode="Markdown",
         )
     else:
@@ -95,8 +103,13 @@ async def show_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         plans = list_active_plans(session, service_id)
         counts = stock_count_for_plans(session, [p.id for p in plans])
         markup = plans_keyboard(plans, settings.currency, counts)
-        desc = service.description or "Elige uno de los planes disponibles."
-        text = f"{service.emoji} *{service.name}*\n\n{desc}"
+        desc = service.description or "Elige el plan que mejor se adapte a ti."
+        text = (
+            f"{service.emoji} *{service.name}*\n\n"
+            f"{desc}\n\n"
+            "🟢 Disponible ahora\n"
+            "🔴 Sin stock por el momento"
+        )
     await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
 
 
@@ -119,15 +132,14 @@ async def show_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         stock = counts.get(plan.id, 0)
         markup = plan_detail_keyboard(plan.id, has_stock=stock > 0)
         text = (
-            f"{plan.service.emoji} *{plan.service.name} — {plan.name}*\n\n"
+            f"🧾 *Detalle del plan*\n\n"
+            f"{plan.service.emoji} *{plan.service.name}*\n"
+            f"Plan: *{plan.name}*\n"
             f"💵 Precio: *{plan.price:.2f} {settings.currency}*\n"
             f"⏳ Duración: *{plan.duration_days} días*\n"
-            f"📦 Disponibles: *{stock}*\n"
+            f"📦 Stock disponible: *{stock}*\n"
         )
         if plan.description:
-            text += f"\n{plan.description}\n"
+            text += f"\n📝 {plan.description}\n"
+        text += "\nToca *🛒 Comprar ahora* para continuar."
     await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
-
-
-async def back_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await show_catalog(update, context)
