@@ -367,8 +367,11 @@ async def cmd_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     args = context.args or []
     if len(args) < 1:
         await update.message.reply_text(
-            "Uso: /addstock `<plan_id>`\nLuego envía credenciales (una por línea o por mensaje).\n"
-            "Termina con /done o /cancel para abortar.",
+            "Uso: /addstock `<plan_id>`\n\n"
+            "Después puedes:\n"
+            "• Pegar las credenciales en el chat (1 por línea o 1 por mensaje), o\n"
+            "• Subir un archivo *.txt* con 1 credencial por línea (más rápido para lotes).\n\n"
+            "Cuando termines envía /done. Para abortar, /cancel.",
             parse_mode="Markdown",
         )
         return ConversationHandler.END
@@ -385,9 +388,10 @@ async def cmd_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     context.user_data["stock_plan_id"] = plan_id
     context.user_data["stock_lines"] = []
     await update.message.reply_text(
-        f"📥 Modo añadir stock al plan {plan_id} activado.\n"
-        "Envía las credenciales. Cada mensaje (o cada línea de un mensaje) cuenta como un item.\n"
-        "Cuando termines envía /done. Para abortar, /cancel."
+        f"📥 Modo añadir stock al plan {plan_id} activado.\n\n"
+        "Pega credenciales (1 por línea) *o* sube un archivo .txt con 1 por línea.\n"
+        "Cuando termines envía /done. Para abortar, /cancel.",
+        parse_mode="Markdown",
     )
     return ASK_STOCK_LINES
 
@@ -564,6 +568,7 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         low_stock_info: tuple[str, int] | None = None
 
         commission_for_referrer: tuple[int, float] | None = None
+        promoted_to_level: int | None = None
         if action == "approve":
             stock_item = take_stock(session, order.plan_id)
             if stock_item is None:
@@ -577,11 +582,19 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             order.review_requested_at = now
             delivered_text = stock_item.credentials
             from bot.services.referral_service import maybe_pay_commission
+            from bot.services.vip_service import maybe_promote_vip
+
             commission = maybe_pay_commission(session, order)
             if commission > 0 and order.user.referred_by_id is not None:
                 ref_user = session.get(User, order.user.referred_by_id)
                 if ref_user is not None:
                     commission_for_referrer = (ref_user.telegram_id, commission)
+            promoted_to_level = maybe_promote_vip(
+                session,
+                order.user,
+                settings.vip_threshold_1,
+                settings.vip_threshold_2,
+            )
             edit_text = f"✅ Pedido #{order_id} aprobado y entregado."
             notify_text = (
                 f"🎉 *¡Tu pedido #{order_id} ha sido entregado!*\n\n"
@@ -666,6 +679,15 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
             except Exception:
                 log.exception("No se pudo pedir reseña")
+        if promoted_to_level is not None and notify_user_id:
+            try:
+                from bot.handlers.orders import _notify_vip_promotion
+
+                await _notify_vip_promotion(
+                    context, notify_user_id, promoted_to_level
+                )
+            except Exception:
+                log.exception("No se pudo notificar promoción VIP")
 
 
 # ---------- stats / broadcast ----------

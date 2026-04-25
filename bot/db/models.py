@@ -148,6 +148,7 @@ class Order(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expiry_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expiry_reminded_24h_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expired_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cut_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     review_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
