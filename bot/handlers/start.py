@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.db.database import session_scope
@@ -257,6 +257,37 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     raw = update.message.text.strip()
     text = raw.lower()
+
+    settings = _settings(context)
+    if update.effective_user.id in settings.admin_ids:
+        pending = context.user_data.get("awaiting_support_reply")
+        if pending and not raw.startswith("/"):
+            context.user_data.pop("awaiting_support_reply", None)
+            target_id = pending["target_id"] if isinstance(pending, dict) else pending
+            sup_id = pending.get("support_id") if isinstance(pending, dict) else None
+            try:
+                await context.bot.send_message(
+                    target_id,
+                    f"💬 *Soporte*\n\n{raw}",
+                    parse_mode="Markdown",
+                )
+                if sup_id is not None:
+                    with session_scope() as session:
+                        sup = session.get(SupportMessage, sup_id)
+                        if sup is not None and not sup.is_resolved:
+                            sup.is_resolved = True
+                await update.message.reply_text(
+                    f"✅ Respuesta enviada al cliente `{target_id}`."
+                    + (" Ticket marcado como resuelto." if sup_id is not None else ""),
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                log.exception("No se pudo enviar respuesta al cliente %s", target_id)
+                await update.message.reply_text(
+                    "❌ No se pudo enviar la respuesta. Verifica el ID o intenta con /reply."
+                )
+            return
+
     if text.startswith("🛍") or "catálogo" in text or "catalogo" in text:
         await show_catalog(update, context)
         return
@@ -282,7 +313,6 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await cmd_help(update, context)
         return
 
-    settings = _settings(context)
     if update.effective_user.id in settings.admin_ids:
         return
 
@@ -306,7 +336,10 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             username=tg_user.username,
             full_name=tg_user.full_name,
         )
-        session.add(SupportMessage(user_id=user.id, message_text=raw))
+        sup_msg = SupportMessage(user_id=user.id, message_text=raw)
+        session.add(sup_msg)
+        session.flush()
+        sup_id = sup_msg.id
 
     await update.message.reply_text(
         "📨 Recibimos tu mensaje. Un administrador te responderá lo antes posible.",
@@ -314,14 +347,24 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
     label = (
-        f"📬 *Mensaje de soporte*\n"
+        f"📬 *Mensaje de soporte #{sup_id}*\n"
         f"De: {tg_user.full_name or '—'} (@{tg_user.username or '—'})\n"
         f"Telegram ID: `{tg_user.id}`\n\n"
-        f"_Para responder:_ `/reply {tg_user.id} tu respuesta aquí`"
+        f"Toca *✏️ Responder* o *✅ Resuelto*. También puedes usar /soportes para verlos todos."
+    )
+    reply_markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✏️ Responder", callback_data=f"sup:reply:{sup_id}"),
+                InlineKeyboardButton("✅ Resuelto", callback_data=f"sup:resolve:{sup_id}"),
+            ]
+        ]
     )
     for admin_id in settings.admin_ids:
         try:
-            await context.bot.send_message(admin_id, label, parse_mode="Markdown")
+            await context.bot.send_message(
+                admin_id, label, parse_mode="Markdown", reply_markup=reply_markup
+            )
             await context.bot.forward_message(
                 chat_id=admin_id,
                 from_chat_id=update.effective_chat.id,
@@ -329,3 +372,162 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         except Exception:
             log.exception("No se pudo reenviar mensaje de soporte al admin %s", admin_id)
+
+
+def _resolve_support_target(sup_id: int) -> tuple[int, str] | None:
+    """Devuelve (telegram_id, label_amigable) para un mensaje de soporte."""
+    from sqlalchemy import select
+    from bot.db.models import User as UserModel
+
+    with session_scope() as session:
+        sup = session.get(SupportMessage, sup_id)
+        if sup is None:
+            return None
+        user = session.get(UserModel, sup.user_id)
+        if user is None:
+            return None
+        label = (
+            f"*{user.full_name or user.username or user.telegram_id}* "
+            f"(`{user.telegram_id}`)"
+        )
+        return user.telegram_id, label
+
+
+async def cb_support_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback `sup:reply:<sup_id>` — el admin pulsa Responder en un soporte."""
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        if query:
+            await query.answer()
+        return
+    settings = _settings(context)
+    if update.effective_user.id not in settings.admin_ids:
+        await query.answer("Solo administradores", show_alert=True)
+        return
+    try:
+        sup_id = int(query.data.split(":")[2])
+    except (ValueError, IndexError):
+        await query.answer()
+        return
+    await query.answer()
+    info = _resolve_support_target(sup_id)
+    if info is None:
+        await context.bot.send_message(
+            update.effective_user.id,
+            "No encontré el mensaje de soporte. Puede que ya esté resuelto.",
+        )
+        return
+    target_id, target_label = info
+    context.user_data["awaiting_support_reply"] = {
+        "target_id": target_id,
+        "support_id": sup_id,
+    }
+    await context.bot.send_message(
+        update.effective_user.id,
+        f"✏️ *Respondiendo a* {target_label}\n\n"
+        "Escribe ahora tu mensaje. El próximo texto que envíes se le hará llegar al cliente "
+        "y el ticket quedará marcado como resuelto.\n"
+        "Si quieres cancelar, escribe /cancelar.",
+        parse_mode="Markdown",
+    )
+
+
+async def cb_support_resolve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback `sup:resolve:<sup_id>` — marcar mensaje de soporte como resuelto."""
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        if query:
+            await query.answer()
+        return
+    settings = _settings(context)
+    if update.effective_user.id not in settings.admin_ids:
+        await query.answer("Solo administradores", show_alert=True)
+        return
+    try:
+        sup_id = int(query.data.split(":")[2])
+    except (ValueError, IndexError):
+        await query.answer()
+        return
+    with session_scope() as session:
+        sup = session.get(SupportMessage, sup_id)
+        if sup is None:
+            await query.answer("Soporte no encontrado", show_alert=True)
+            return
+        if sup.is_resolved:
+            await query.answer("Ya estaba marcado como resuelto", show_alert=True)
+            return
+        sup.is_resolved = True
+    await query.answer("Marcado como resuelto")
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        log.exception("No se pudo limpiar el teclado del mensaje de soporte")
+
+
+async def cmd_support_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/soportes` — lista los mensajes de soporte pendientes (solo admin)."""
+    if update.message is None or update.effective_user is None:
+        return
+    settings = _settings(context)
+    if update.effective_user.id not in settings.admin_ids:
+        await update.message.reply_text(
+            "⛔ Solo los administradores pueden usar este comando."
+        )
+        return
+    from sqlalchemy import select
+    from bot.db.models import User as UserModel
+
+    with session_scope() as session:
+        rows = list(
+            session.execute(
+                select(SupportMessage, UserModel)
+                .join(UserModel, UserModel.id == SupportMessage.user_id)
+                .where(SupportMessage.is_resolved.is_(False))
+                .order_by(SupportMessage.created_at.desc())
+                .limit(20)
+            )
+        )
+        if not rows:
+            await update.message.reply_text(
+                "🎫 *Soportes pendientes*\n\nNo hay mensajes de soporte abiertos.",
+                parse_mode="Markdown",
+            )
+            return
+        await update.message.reply_text(
+            f"🎫 *Soportes pendientes ({len(rows)})*\n\n"
+            "Toca *✏️ Responder* para contestar o *✅ Resuelto* si ya lo atendiste.",
+            parse_mode="Markdown",
+        )
+        for sup, user in rows:
+            preview = (sup.message_text or "").strip()
+            if len(preview) > 240:
+                preview = preview[:240] + "…"
+            text = (
+                f"*#{sup.id}* — {user.full_name or user.username or user.telegram_id} "
+                f"(`{user.telegram_id}`)\n"
+                f"_{sup.created_at:%Y-%m-%d %H:%M}_\n\n"
+                f"{preview or '(sin texto)'}"
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✏️ Responder", callback_data=f"sup:reply:{sup.id}"
+                        ),
+                        InlineKeyboardButton(
+                            "✅ Resuelto", callback_data=f"sup:resolve:{sup.id}"
+                        ),
+                    ]
+                ]
+            )
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+
+
+async def cmd_cancel_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancela una respuesta de soporte en curso."""
+    if update.message is None:
+        return
+    if context.user_data.pop("awaiting_support_reply", None) is not None:
+        await update.message.reply_text("✏️ Respuesta cancelada.")
+    else:
+        await update.message.reply_text("No tienes ninguna respuesta pendiente.")

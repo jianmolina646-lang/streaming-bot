@@ -46,6 +46,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("faq", start_h.cmd_faq))
     app.add_handler(CommandHandler("saldo", start_h.cmd_saldo))
     app.add_handler(CommandHandler("tutorial", start_h.cmd_tutorial))
+    app.add_handler(CommandHandler("cancelar", start_h.cmd_cancel_reply))
+    app.add_handler(CommandHandler("soportes", start_h.cmd_support_list))
     app.add_handler(CommandHandler("referidos", start_h.cmd_referrals))
     app.add_handler(CommandHandler("cupon", orders_h.cmd_apply_coupon))
     app.add_handler(CommandHandler("garantia", orders_h.cmd_warranty))
@@ -122,6 +124,8 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(admin_h.cb_admin_action, pattern=r"^adm:(approve|reject):\d+$"))
     app.add_handler(CallbackQueryHandler(catalog_h.cb_waitlist, pattern=r"^wait:\d+$"))
     app.add_handler(CallbackQueryHandler(orders_h.cb_review, pattern=r"^review:\d+:[0-5]$"))
+    app.add_handler(CallbackQueryHandler(start_h.cb_support_reply, pattern=r"^sup:reply:\d+$"))
+    app.add_handler(CallbackQueryHandler(start_h.cb_support_resolve, pattern=r"^sup:resolve:\d+$"))
 
     # Comprobantes de pago: fotos o documentos.
     app.add_handler(
