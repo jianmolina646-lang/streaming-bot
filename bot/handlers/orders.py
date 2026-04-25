@@ -41,7 +41,6 @@ from config import Settings
 
 log = logging.getLogger(__name__)
 
-# Estados legibles para el usuario.
 STATUS_LABELS = {
     Order.STATUS_PENDING_PAYMENT: "⏳ Esperando comprobante",
     Order.STATUS_AWAITING_REVIEW: "🔍 En revisión por admin",
@@ -52,7 +51,6 @@ STATUS_LABELS = {
     Order.STATUS_REFUNDED: "↩️ Reembolsado",
 }
 
-# VIP descuentos por nivel.
 VIP_DISCOUNTS = {0: 0.0, 1: 5.0, 2: 10.0}
 
 
@@ -62,6 +60,22 @@ def _settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
 
 def _vip_discount_pct(vip_level: int) -> float:
     return VIP_DISCOUNTS.get(int(vip_level or 0), 0.0)
+
+
+def _fmt_dt(value: datetime | None) -> str:
+    if value is None:
+        return "—"
+    return value.strftime("%Y-%m-%d")
+
+
+def _extract_account_label(credentials: str | None) -> str:
+    if not credentials:
+        return "—"
+    first_line = credentials.splitlines()[0].strip()
+    if not first_line:
+        return "—"
+    parts = first_line.split(":", 1)
+    return parts[0].strip() if parts else first_line
 
 
 def _compute_final_price(
@@ -134,22 +148,21 @@ async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         service_emoji = plan.service.emoji
 
     lines = [
-        f"🛒 *{service_emoji} {service_name} — {plan_name}*",
-        f"💵 Precio: *{plan.price:.2f} {settings.currency}*",
+        f"🛒 *Resumen de compra*",
+        "",
+        f"Producto: *{service_emoji} {service_name} — {plan_name}*",
+        f"Precio base: *{plan.price:.2f} {settings.currency}*",
     ]
     if vip_off > 0:
-        lines.append(
-            f"⭐ Descuento VIP: −{vip_off:.2f} {settings.currency}"
-        )
+        lines.append(f"⭐ Descuento VIP: −{vip_off:.2f} {settings.currency}")
     if coupon is not None and coupon_off > 0:
-        lines.append(
-            f"🎟 Cupón `{coupon.code}`: −{coupon_off:.2f} {settings.currency}"
-        )
+        lines.append(f"🎟 Cupón `{coupon.code}`: −{coupon_off:.2f} {settings.currency}")
     if total_off > 0:
-        lines.append(f"✅ *Total: {final:.2f} {settings.currency}*")
-    lines.append(f"💰 Tu saldo: *{balance:.2f} {settings.currency}*")
-    lines.append("")
-    lines.append("Elige cómo pagar:")
+        lines.append(f"Total final: *{final:.2f} {settings.currency}*")
+    else:
+        lines.append(f"Total final: *{plan.price:.2f} {settings.currency}*")
+    lines.append(f"Saldo disponible: *{balance:.2f} {settings.currency}*")
+    lines.extend(["", "Elige cómo quieres pagar:"])
     text = "\n".join(lines)
 
     await query.edit_message_text(
@@ -215,9 +228,8 @@ async def cb_pay_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         order = create_order(session, user, plan)
         order.payment_method = Order.PAY_METHOD_MANUAL
         order.discount_amount = round(total_off, 2)
-        order.price = plan.price  # mantenemos precio base para reportes
+        order.price = plan.price
         _consume_coupon_and_set_on_order(session, order, coupon, coupon_off)
-        # Limpiamos el cupón después de usarlo.
         if coupon is not None:
             context.user_data.pop("pending_coupon", None)
         order_id = order.id
@@ -231,20 +243,22 @@ async def cb_pay_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     detail_lines = [
         f"🧾 *Pedido #{order_id} creado*",
         "",
-        f"{service_emoji} *{service_name} — {plan_name}*",
+        f"Producto: *{service_emoji} {service_name} — {plan_name}*",
         f"💵 Precio base: *{plan.price:.2f} {settings.currency}*",
     ]
     if vip_off > 0:
-        detail_lines.append(f"⭐ Descuento VIP: −{vip_off:.2f}")
+        detail_lines.append(f"⭐ Descuento VIP: −{vip_off:.2f} {settings.currency}")
     if coupon_off > 0:
-        detail_lines.append(f"🎟 Cupón: −{coupon_off:.2f}")
+        detail_lines.append(f"🎟 Cupón: −{coupon_off:.2f} {settings.currency}")
     detail_lines.append(f"➡️ *Total a pagar: {final:.2f} {settings.currency}*")
-    detail_lines.append("")
-    detail_lines.append(pay_text)
-    detail_lines.append("")
-    detail_lines.append(
-        "📤 Cuando completes el pago, *envía aquí mismo una foto o captura del "
-        "comprobante*."
+    detail_lines.extend(
+        [
+            "",
+            "*Métodos de pago*",
+            pay_text,
+            "",
+            "📤 Cuando completes el pago, envía aquí mismo una foto o captura del comprobante.",
+        ]
     )
     await query.edit_message_text(
         "\n".join(detail_lines),
@@ -341,6 +355,7 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         commission_paid = maybe_pay_commission(session, order)
                         if commission_paid > 0 and user.referred_by_id is not None:
                             from bot.db.models import User as UserModel
+
                             ref_user = session.get(UserModel, user.referred_by_id)
                             if ref_user is not None:
                                 referrer_tg_id = ref_user.telegram_id
@@ -364,18 +379,17 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     msg = (
-        f"🎉 *¡Compra realizada!*\n\n"
+        f"🎉 *¡Compra completada con éxito!*\n\n"
         f"Pedido: *#{order_id}*\n"
         f"Producto: {plan_label}\n"
-        f"Pagaste: *{final_price:.2f} {settings.currency}*\n"
-        f"Vence: {expires_at:%Y-%m-%d}\n\n"
-        f"*Credenciales:*\n```\n{delivered_text}\n```\n\n"
-        "⚠️ No compartas estos datos. Si algo falla usa /garantia "
+        f"Importe cobrado: *{final_price:.2f} {settings.currency}*\n"
+        f"Vencimiento: *{_fmt_dt(expires_at)}*\n\n"
+        f"*Tus credenciales*\n```\n{delivered_text}\n```\n\n"
+        "⚠️ Guarda esta información. Si algo falla, usa /garantia "
         f"{order_id} para abrir un ticket."
     )
     await query.edit_message_text(msg, parse_mode="Markdown")
 
-    # Solicitud de calificación.
     if order_id is not None:
         try:
             await context.bot.send_message(
@@ -386,7 +400,6 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception:
             log.exception("No se pudo pedir reseña")
 
-    # Aviso a admins: venta por saldo.
     notify_admin = (
         f"💰 *Venta por saldo*\n"
         f"Pedido #{order_id} — {plan_label} — {final_price:.2f} {settings.currency}\n"
@@ -396,127 +409,87 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             await context.bot.send_message(admin_id, notify_admin, parse_mode="Markdown")
         except Exception:
-            log.exception("No se pudo notificar al admin %s", admin_id)
+            log.exception("No se pudo avisar venta por saldo a admin %s", admin_id)
 
     if low_stock_info is not None:
-        plan_label2, remaining = low_stock_info
-        alert = (
-            f"⚠️ *Stock bajo*: {plan_label2} — quedan *{remaining}*.\n"
-            "Usa /addstock para reponer."
+        plan_label, remaining = low_stock_info
+        warn = (
+            f"⚠️ *Stock bajo*\n{plan_label}\nQuedan *{remaining}* unidad(es)."
         )
         for admin_id in settings.admin_ids:
             try:
-                await context.bot.send_message(admin_id, alert, parse_mode="Markdown")
+                await context.bot.send_message(admin_id, warn, parse_mode="Markdown")
             except Exception:
-                log.exception("No se pudo enviar aviso de stock bajo a %s", admin_id)
+                log.exception("No se pudo avisar stock bajo a admin %s", admin_id)
 
-    # Notificar al referidor de la comisión cobrada.
     if commission_paid > 0 and referrer_tg_id is not None:
         try:
             await context.bot.send_message(
                 referrer_tg_id,
-                f"🎁 ¡Tu referido hizo su primera compra! Acabas de ganar "
-                f"*+{commission_paid:.2f} {settings.currency}* en saldo.\n"
-                "Mira tu /saldo para usarlo en tu próxima compra.",
+                f"🎁 Ganaste *{commission_paid:.2f} {settings.currency}* de comisión por referido.",
                 parse_mode="Markdown",
             )
         except Exception:
-            log.exception("No se pudo avisar al referidor")
-
-
-async def cancel_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None or query.data is None:
-        return
-    await query.answer()
-    try:
-        order_id = int(query.data.split(":")[2])
-    except (ValueError, IndexError):
-        return
-    with session_scope() as session:
-        order = get_order(session, order_id)
-        if order is None:
-            await query.edit_message_text("Pedido no encontrado.")
-            return
-        if order.status not in (Order.STATUS_PENDING_PAYMENT, Order.STATUS_AWAITING_REVIEW):
-            await query.edit_message_text(
-                f"No se puede cancelar este pedido (estado: "
-                f"{STATUS_LABELS.get(order.status, order.status)})."
-            )
-            return
-        order.status = Order.STATUS_REJECTED
-        order.admin_note = "Cancelado por el cliente."
-    if context.user_data.get("awaiting_proof_for_order") == order_id:
-        context.user_data.pop("awaiting_proof_for_order", None)
-    await query.edit_message_text(f"❌ Pedido #{order_id} cancelado.")
+            log.exception("No se pudo avisar comisión al referido")
 
 
 async def receive_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Recibe foto/documento como comprobante de pago y notifica a los admins."""
-    if update.message is None or update.effective_user is None:
-        return
-    order_id = context.user_data.get("awaiting_proof_for_order")
-    if not order_id:
+    """Recibe foto/documento como comprobante y mueve el pedido a revisión."""
+    message = update.message
+    if message is None or update.effective_user is None:
         return
 
-    msg = update.message
+    order_id = context.user_data.get("awaiting_proof_for_order")
+    if order_id is None:
+        return
+
+    tg_user = update.effective_user
     file_id: str | None = None
-    if msg.photo:
-        file_id = msg.photo[-1].file_id
-    elif msg.document:
-        file_id = msg.document.file_id
-    else:
-        await msg.reply_text(
-            "Por favor envía una *foto* o *documento* con el comprobante.",
-            parse_mode="Markdown",
-        )
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        file_id = message.document.file_id
+    if file_id is None:
         return
 
     settings = _settings(context)
+    admin_text = None
+
     with session_scope() as session:
-        order = get_order(session, order_id)
+        order = get_order(session, int(order_id))
         if order is None:
-            await msg.reply_text("No encontré tu pedido.")
-            context.user_data.pop("awaiting_proof_for_order", None)
+            await message.reply_text("Pedido no encontrado.")
             return
-        if order.status != Order.STATUS_PENDING_PAYMENT:
-            await msg.reply_text(
-                f"Tu pedido ya está en estado: "
-                f"{STATUS_LABELS.get(order.status, order.status)}"
+        if order.user.telegram_id != tg_user.id:
+            await message.reply_text(
+                "Ese pedido no te pertenece. Usa /pedidos para ver tus pedidos."
             )
             return
         order.status = Order.STATUS_AWAITING_REVIEW
         order.proof_file_id = file_id
-        order.proof_message_id = msg.message_id
-        plan_name = order.plan.name
-        service_name = order.plan.service.name
-        service_emoji = order.plan.service.emoji
-        final_price = max(0.0, order.price - (order.discount_amount or 0.0))
-        username = order.user.username or "—"
-        full_name = order.user.full_name or "—"
-        client_chat_id = update.effective_chat.id
+        order.proof_message_id = message.message_id
+        admin_text = (
+            f"🧾 *Comprobante recibido*\n\n"
+            f"Pedido: *#{order.id}*\n"
+            f"Cliente: {tg_user.full_name or '—'} (@{tg_user.username or '—'})\n"
+            f"Telegram ID: `{tg_user.id}`\n"
+            f"Producto: {order.plan.service.emoji} {order.plan.service.name} — {order.plan.name}\n"
+            f"Importe: *{max(0.0, order.price - (order.discount_amount or 0.0)):.2f} {settings.currency}*"
+        )
 
     context.user_data.pop("awaiting_proof_for_order", None)
-
-    await msg.reply_text(
-        f"✅ Comprobante recibido para el pedido #{order_id}.\n"
-        "Tu pago está siendo revisado. Te avisamos cuando esté listo."
+    await message.reply_text(
+        "✅ Comprobante recibido. Tu pedido quedó en revisión y te avisaremos cuando sea aprobado.",
+        reply_markup=main_menu(),
     )
 
-    caption = (
-        f"🆕 *Nuevo pedido para revisar*\n\n"
-        f"Pedido: *#{order_id}*\n"
-        f"Cliente: {full_name} (@{username}) — `{update.effective_user.id}`\n"
-        f"Producto: {service_emoji} {service_name} — {plan_name}\n"
-        f"Total: *{final_price:.2f} {settings.currency}*"
-    )
     for admin_id in settings.admin_ids:
         try:
-            await context.bot.send_message(admin_id, caption, parse_mode="Markdown")
+            await context.bot.send_message(admin_id, admin_text, parse_mode="Markdown")
             await context.bot.forward_message(
                 chat_id=admin_id,
-                from_chat_id=client_chat_id,
-                message_id=msg.message_id,
+                from_chat_id=message.chat_id,
+                message_id=message.message_id,
             )
             await context.bot.send_message(
                 admin_id,
@@ -538,19 +511,31 @@ async def show_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             full_name=update.effective_user.full_name,
         )
         orders = list_user_orders(session, user.id)
+        settings = _settings(context)
         if not orders:
-            text = "📦 Aún no tienes pedidos."
+            text = (
+                "📦 *Tus pedidos*\n\n"
+                "Todavía no tienes compras registradas. Entra a *🛍 Catálogo* para hacer tu primer pedido."
+            )
         else:
-            lines = ["📦 *Tus últimos pedidos:*", ""]
-            settings = _settings(context)
+            lines = ["📦 *Resumen de tus pedidos*", ""]
             for o in orders:
                 price = max(0.0, o.price - (o.discount_amount or 0.0))
                 lines.append(
-                    f"#{o.id} — {o.plan.service.emoji} {o.plan.service.name} "
-                    f"{o.plan.name} — {price:.2f} {settings.currency} — "
-                    f"{STATUS_LABELS.get(o.status, o.status)}"
+                    f"*Pedido #{o.id}* — {o.plan.service.emoji} {o.plan.service.name} / {o.plan.name}"
                 )
-            text = "\n".join(lines)
+                lines.append(
+                    f"Estado: {STATUS_LABELS.get(o.status, o.status)} | "
+                    f"Importe: {price:.2f} {settings.currency}"
+                )
+                lines.append(f"Fecha de compra: {_fmt_dt(o.created_at)}")
+                lines.append(f"Vencimiento: {_fmt_dt(o.expires_at)}")
+                if o.delivered_credentials:
+                    lines.append(
+                        f"Cuenta entregada: `{_extract_account_label(o.delivered_credentials)}`"
+                    )
+                lines.append("")
+            text = "\n".join(lines).rstrip()
     if update.message is not None:
         await update.message.reply_text(
             text, parse_mode="Markdown", reply_markup=main_menu()
@@ -575,9 +560,7 @@ async def cmd_apply_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     with session_scope() as session:
         coupon = get_coupon_by_code(session, code)
         if coupon is None or not coupon_is_valid(coupon):
-            await update.message.reply_text(
-                "❌ Cupón inválido o ya expirado."
-            )
+            await update.message.reply_text("❌ Cupón inválido o ya expirado.")
             return
         if coupon.discount_percent > 0:
             desc = f"{coupon.discount_percent:.0f}% de descuento"
@@ -621,6 +604,7 @@ async def cmd_warranty(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
         from bot.services.warranty_service import open_ticket
+
         ticket = open_ticket(session, order.user.id, order.id, description)
         ticket_id = ticket.id
         plan_label = f"{order.plan.service.emoji} {order.plan.service.name} — {order.plan.name}"
@@ -637,49 +621,64 @@ async def cmd_warranty(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Producto: {plan_label}\n"
         f"Credencial: `{cred}`\n"
         f"Mensaje: {description or '(sin descripción)'}\n\n"
-        f"Acciones:\n"
-        f"• Reponer: `/replace {order_id}`\n"
-        f"• Reembolsar: `/refund {order_id}`\n"
-        f"• Marcar resuelto: `/resolveticket {ticket_id}`"
+        f"Usa /replace {order_id} o /refund {order_id} cuando lo resuelvas."
     )
     for admin_id in settings.admin_ids:
         try:
             await context.bot.send_message(admin_id, body, parse_mode="Markdown")
         except Exception:
-            log.exception("No se pudo avisar al admin %s del ticket", admin_id)
+            log.exception("No se pudo notificar ticket a admin %s", admin_id)
 
 
-async def cb_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Callback `review:<order_id>:<rating>` — guarda calificación 1-5 (0=saltar)."""
+async def cancel_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.data is None or update.effective_user is None:
         return
     await query.answer()
     try:
-        _, oid_str, rating_str = query.data.split(":")
-        order_id = int(oid_str)
-        rating = int(rating_str)
+        order_id = int(query.data.split(":")[-1])
     except (ValueError, IndexError):
         return
-    if rating == 0:
-        await query.edit_message_text("Gracias 🙏")
+    with session_scope() as session:
+        order = get_order(session, order_id)
+        if order is None:
+            await query.edit_message_text("Pedido no encontrado.")
+            return
+        if order.user.telegram_id != update.effective_user.id:
+            await query.edit_message_text(
+                "Ese pedido no te pertenece. Usa /pedidos para ver tus compras."
+            )
+            return
+        if order.status != Order.STATUS_PENDING_PAYMENT:
+            await query.edit_message_text(
+                "Solo puedes cancelar pedidos que aún esperan comprobante."
+            )
+            return
+        order.status = Order.STATUS_REJECTED
+    await query.edit_message_text(f"❌ Pedido #{order_id} cancelado.")
+
+
+async def cb_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
         return
-    if rating < 1 or rating > 5:
+    await query.answer()
+    try:
+        _, order_id_s, rating_s = query.data.split(":")
+        order_id = int(order_id_s)
+        rating = int(rating_s)
+    except (ValueError, IndexError):
         return
     with session_scope() as session:
         order = get_order(session, order_id)
         if order is None or order.user.telegram_id != update.effective_user.id:
+            await query.edit_message_text("Pedido no encontrado.")
             return
-        from bot.services.review_service import (
-            add_review,
-            get_review_for_order,
-        )
-        existing = get_review_for_order(session, order.id)
-        if existing is not None:
-            existing.rating = rating
-        else:
-            add_review(session, order.id, order.user.id, rating, None)
-    msg = "🙏 ¡Gracias por tu calificación!" + (
-        " Si tienes algún detalle, puedes mandarlo con /soporte." if rating <= 3 else ""
-    )
+        from bot.services.review_service import save_review
+
+        save_review(session, order.user.id, order.id, rating)
+    if rating == 0:
+        msg = "Gracias 🙏"
+    else:
+        msg = f"¡Gracias por tu reseña de {rating}⭐!"
     await query.edit_message_text(msg)

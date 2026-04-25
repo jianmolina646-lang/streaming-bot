@@ -45,6 +45,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("pedidos", orders_h.show_my_orders))
     app.add_handler(CommandHandler("faq", start_h.cmd_faq))
     app.add_handler(CommandHandler("saldo", start_h.cmd_saldo))
+    app.add_handler(CommandHandler("tutorial", start_h.cmd_tutorial))
     app.add_handler(CommandHandler("referidos", start_h.cmd_referrals))
     app.add_handler(CommandHandler("cupon", orders_h.cmd_apply_coupon))
     app.add_handler(CommandHandler("garantia", orders_h.cmd_warranty))
