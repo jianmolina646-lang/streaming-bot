@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from sqlalchemy import func, or_, select
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
 from bot.db.database import session_scope
@@ -79,7 +79,10 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/order `<id>` — detalle de un pedido\n"
         "/expiring — pedidos por vencer en 7 días\n"
         "/expired — pedidos vencidos pendientes de cortar\n"
-        "/markcut `<id>` / /cutall — marcar como cortado\n\n"
+        "/markcut `<id>` / /cutall — marcar como cortado\n"
+        "/buscarcuenta `<texto>` — buscar pedido por correo/credencial\n"
+        "/cuentas `<tg_id>` — ver cuentas activas del cliente con botones\n"
+        "/cancelarpedido `<id>` — cancelar pedido y devolver dinero (todo en uno)\n\n"
         "*Saldo / billetera:*\n"
         "/addbalance `<tg_id>` `<monto>` — cargar saldo\n"
         "/setbalance `<tg_id>` `<monto>` — fijar saldo\n"
@@ -863,10 +866,18 @@ async def cmd_order_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
         lines = [f"*Historial de @{user.username or user.full_name or user.id}:*", ""]
         for o in orders:
+            cred = (o.delivered_credentials or "").split("\n")[0][:60]
+            cred_line = f"\n  🔑 `{cred}`" if cred else ""
+            vence = f" — vence {o.expires_at:%Y-%m-%d}" if o.expires_at else ""
             lines.append(
                 f"#{o.id} — {o.plan.service.emoji} {o.plan.service.name} {o.plan.name} — "
-                f"{o.price:.2f} {settings.currency} — {o.status}"
+                f"{o.price:.2f} {settings.currency} — {o.status}{vence}{cred_line}"
             )
+        lines.append("")
+        lines.append(
+            "Acciones rápidas: `/cuentas <tg_id>` para ver activas con botones, "
+            "`/cancelarpedido <id>` para cancelar y devolver."
+        )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -1368,6 +1379,321 @@ async def cmd_replace(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         except Exception:
             log.exception("No se pudo notificar reposición")
+
+
+# ---------- buscar / cuentas / cancelar (flujo simplificado) ----------
+
+
+def _order_action_keyboard(order_id: int, *, include_replace: bool = True) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton("❌ Cancelar y devolver", callback_data=f"adm:cancel:{order_id}")]
+    if include_replace:
+        row.append(InlineKeyboardButton("🔄 Reemplazar", callback_data=f"adm:replace:{order_id}"))
+    return InlineKeyboardMarkup([row])
+
+
+def _order_card(order: Order, currency: str) -> str:
+    cred = (order.delivered_credentials or "—").strip()
+    user = order.user
+    uname = user.username or user.full_name or str(user.telegram_id)
+    parts = [
+        f"*#{order.id}* — {order.plan.service.emoji} {order.plan.service.name} — {order.plan.name}",
+        f"Cliente: {user.full_name or '—'} (@{uname}) — TG `{user.telegram_id}`",
+        f"Total: {order.price:.2f} {currency} — Estado: `{order.status}`",
+    ]
+    if order.delivered_at:
+        parts.append(f"Entregado: {order.delivered_at:%Y-%m-%d %H:%M}")
+    if order.expires_at:
+        parts.append(f"Vence: {order.expires_at:%Y-%m-%d}")
+    parts.append(f"*Credenciales:*\n```\n{cred}\n```")
+    return "\n".join(parts)
+
+
+def _refund_order_inplace(
+    session, order: Order, currency: str
+) -> tuple[int, float, str, str] | None:
+    """Hace el refund + actualiza estado. Devuelve datos para notificar.
+
+    Si ya estaba reembolsado, devuelve None.
+    """
+    if order.status == Order.STATUS_REFUNDED:
+        return None
+    amount = max(0.0, order.price - (order.discount_amount or 0.0))
+    if amount > 0:
+        wallet_add_balance(
+            session,
+            order.user,
+            amount,
+            kind=WalletTransaction.KIND_REFUND,
+            note=f"Cancelación pedido #{order.id}",
+            related_order_id=order.id,
+        )
+    order.status = Order.STATUS_REFUNDED
+    order.cut_at = order.cut_at or datetime.utcnow()
+    order.admin_note = (order.admin_note or "") + (
+        f"\nCancelado y reembolsado {datetime.utcnow():%Y-%m-%d %H:%M}"
+    )
+    plan_label = f"{order.plan.service.emoji} {order.plan.service.name} — {order.plan.name}"
+    cred = (order.delivered_credentials or "—").strip()
+    return (order.user.telegram_id, amount, plan_label, cred)
+
+
+@admin_only
+async def cmd_buscar_cuenta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Busca pedidos por texto en las credenciales entregadas (correo, clave, perfil...)."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Uso: /buscarcuenta `<texto>`\n"
+            "Ejemplos:\n"
+            "• `/buscarcuenta mauricio`\n"
+            "• `/buscarcuenta @gmail.com`\n"
+            "• `/buscarcuenta perfil JUAN`",
+            parse_mode="Markdown",
+        )
+        return
+    needle = " ".join(args).strip()
+    if len(needle) < 3:
+        await update.message.reply_text("Usa al menos 3 caracteres para buscar.")
+        return
+    settings = _settings(context)
+    with session_scope() as session:
+        stmt = (
+            select(Order)
+            .where(
+                Order.delivered_credentials.isnot(None),
+                func.lower(Order.delivered_credentials).like(f"%{needle.lower()}%"),
+            )
+            .order_by(Order.delivered_at.desc().nullslast(), Order.id.desc())
+            .limit(10)
+        )
+        results = list(session.scalars(stmt))
+        if not results:
+            await update.message.reply_text(
+                f"🔎 No encontré pedidos con `{needle}` en las credenciales.",
+                parse_mode="Markdown",
+            )
+            return
+        await update.message.reply_text(
+            f"🔎 *{len(results)} resultado(s) para* `{needle}`:",
+            parse_mode="Markdown",
+        )
+        for o in results:
+            include_replace = o.status == Order.STATUS_DELIVERED
+            await update.message.reply_text(
+                _order_card(o, settings.currency),
+                parse_mode="Markdown",
+                reply_markup=_order_action_keyboard(o.id, include_replace=include_replace),
+            )
+
+
+@admin_only
+async def cmd_cuentas_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lista las cuentas activas (entregadas y vigentes) de un cliente con botones."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Uso: /cuentas `<telegram_id>`\n"
+            "Muestra las cuentas que tiene activas el cliente con botones para "
+            "cancelar o reemplazar.",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        ident = int(args[0])
+    except ValueError:
+        await update.message.reply_text("telegram_id debe ser un número.")
+        return
+    settings = _settings(context)
+    with session_scope() as session:
+        user = session.scalar(select(User).where(User.telegram_id == ident))
+        if user is None:
+            user = session.get(User, ident)
+        if user is None:
+            await update.message.reply_text("Usuario no encontrado.")
+            return
+        stmt = (
+            select(Order)
+            .where(
+                Order.user_id == user.id,
+                Order.status == Order.STATUS_DELIVERED,
+                Order.cut_at.is_(None),
+            )
+            .order_by(Order.delivered_at.desc().nullslast(), Order.id.desc())
+            .limit(20)
+        )
+        orders = list(session.scalars(stmt))
+        if not orders:
+            await update.message.reply_text(
+                f"👤 {user.full_name or user.telegram_id} no tiene cuentas activas."
+            )
+            return
+        uname = user.username or user.full_name or str(user.telegram_id)
+        await update.message.reply_text(
+            f"👤 *{user.full_name or uname}* tiene *{len(orders)}* cuenta(s) activa(s):",
+            parse_mode="Markdown",
+        )
+        for o in orders:
+            await update.message.reply_text(
+                _order_card(o, settings.currency),
+                parse_mode="Markdown",
+                reply_markup=_order_action_keyboard(o.id, include_replace=True),
+            )
+
+
+@admin_only
+async def cmd_cancelar_pedido(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancela un pedido en un solo paso: reembolsa, marca cortado y notifica al cliente."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Uso: /cancelarpedido `<order_id>`\n\n"
+            "Hace todo de una sola vez:\n"
+            "• Devuelve el dinero al saldo del cliente\n"
+            "• Marca el pedido como cancelado/reembolsado\n"
+            "• Avisa al cliente automáticamente\n"
+            "• Te recuerda cambiar la contraseña en la plataforma",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        order_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("order_id debe ser un número.")
+        return
+    settings = _settings(context)
+    notify: tuple[int, float, str, str] | None = None
+    with session_scope() as session:
+        order = get_order(session, order_id)
+        if order is None:
+            await update.message.reply_text("Pedido no encontrado.")
+            return
+        notify = _refund_order_inplace(session, order, settings.currency)
+        if notify is None:
+            await update.message.reply_text(
+                f"Pedido #{order_id} ya estaba reembolsado/cancelado."
+            )
+            return
+    tg_id, amount, plan_label, cred = notify
+    await update.message.reply_text(
+        f"✅ *Pedido #{order_id} cancelado.*\n\n"
+        f"💰 Devuelto al cliente: `{amount:.2f} {settings.currency}`\n"
+        f"📦 Plan: {plan_label}\n\n"
+        f"⚠️ *Recuerda cortar el acceso manualmente* en la plataforma "
+        f"(cambia la contraseña o cierra sesiones):\n"
+        f"```\n{cred}\n```",
+        parse_mode="Markdown",
+    )
+    try:
+        await context.bot.send_message(
+            tg_id,
+            f"↩️ *Tu pedido #{order_id} fue cancelado*\n\n"
+            f"Producto: {plan_label}\n"
+            f"Devolución: +{amount:.2f} {settings.currency} a tu /saldo.\n\n"
+            "Si crees que fue un error, escríbenos a /soporte.",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        log.exception("No se pudo notificar cancelación al cliente")
+
+
+@admin_only
+async def cb_admin_cancel_or_replace(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Maneja `adm:cancel:<id>` y `adm:replace:<id>` desde botones."""
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        await query.answer()
+        return
+    action = parts[1]
+    try:
+        order_id = int(parts[2])
+    except ValueError:
+        await query.answer()
+        return
+    settings = _settings(context)
+
+    if action == "cancel":
+        notify: tuple[int, float, str, str] | None = None
+        with session_scope() as session:
+            order = get_order(session, order_id)
+            if order is None:
+                await query.answer("Pedido no encontrado", show_alert=True)
+                return
+            notify = _refund_order_inplace(session, order, settings.currency)
+            if notify is None:
+                await query.answer("Ya estaba cancelado", show_alert=True)
+                return
+        tg_id, amount, plan_label, cred = notify
+        await query.answer("Cancelado y reembolsado")
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await query.message.reply_text(
+            f"✅ *Pedido #{order_id} cancelado.*\n\n"
+            f"💰 Devuelto: `{amount:.2f} {settings.currency}`\n"
+            f"⚠️ *Corta el acceso manualmente:*\n```\n{cred}\n```",
+            parse_mode="Markdown",
+        )
+        try:
+            await context.bot.send_message(
+                tg_id,
+                f"↩️ *Tu pedido #{order_id} fue cancelado*\n\n"
+                f"Producto: {plan_label}\n"
+                f"Devolución: +{amount:.2f} {settings.currency} a tu /saldo.",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            log.exception("No se pudo notificar cancelación al cliente")
+        return
+
+    if action == "replace":
+        notify_rep: tuple[int, str, str] | None = None
+        with session_scope() as session:
+            order = get_order(session, order_id)
+            if order is None:
+                await query.answer("Pedido no encontrado", show_alert=True)
+                return
+            new_item = take_stock(session, order.plan_id)
+            if new_item is None:
+                await query.answer("⛔ Sin stock disponible", show_alert=True)
+                return
+            order.delivered_credentials = new_item.credentials
+            order.delivered_at = datetime.utcnow()
+            order.admin_note = (order.admin_note or "") + (
+                f"\nReposición {datetime.utcnow():%Y-%m-%d %H:%M}"
+            )
+            plan_label = f"{order.plan.service.emoji} {order.plan.service.name} — {order.plan.name}"
+            notify_rep = (order.user.telegram_id, plan_label, new_item.credentials)
+        await query.answer("Reemplazo entregado")
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        if notify_rep is not None:
+            await query.message.reply_text(
+                f"♻️ *Pedido #{order_id} repuesto.*\n\n"
+                f"Nueva credencial entregada al cliente.",
+                parse_mode="Markdown",
+            )
+            try:
+                await context.bot.send_message(
+                    notify_rep[0],
+                    f"♻️ *Reposición — Pedido #{order_id}*\n\n"
+                    f"Producto: {notify_rep[1]}\n\n"
+                    f"*Nuevas credenciales:*\n```\n{notify_rep[2]}\n```\n\n"
+                    "⚠️ La fecha de vencimiento no cambia.",
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                log.exception("No se pudo notificar reposición")
+        return
+
+    await query.answer()
 
 
 # ---------- bloqueo / nota / vip ----------
