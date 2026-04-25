@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.db.database import session_scope
@@ -18,6 +18,7 @@ from bot.keyboards import (
     payment_method_keyboard,
     review_keyboard,
 )
+from bot.services.vip_service import maybe_promote_vip
 from bot.services.catalog_service import get_plan, take_stock
 from bot.services.coupon_service import (
     compute_discount,
@@ -294,6 +295,7 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     error: str | None = None
     commission_paid = 0.0
     referrer_tg_id: int | None = None
+    promoted_to_level: int | None = None
 
     with session_scope() as session:
         plan = get_plan(session, plan_id)
@@ -373,6 +375,14 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         )
                         if remaining is not None and remaining <= 2:
                             low_stock_info = (plan_label, int(remaining))
+                        new_vip = maybe_promote_vip(
+                            session,
+                            user,
+                            settings.vip_threshold_1,
+                            settings.vip_threshold_2,
+                        )
+                        if new_vip is not None:
+                            promoted_to_level = new_vip
 
     if error is not None:
         await query.edit_message_text(error)
@@ -431,6 +441,35 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         except Exception:
             log.exception("No se pudo avisar comisión al referido")
+
+    if promoted_to_level is not None:
+        await _notify_vip_promotion(context, tg_user.id, promoted_to_level)
+
+
+VIP_LEVEL_LABELS = {
+    1: "VIP 1 (5% de descuento en todas tus compras)",
+    2: "VIP 2 (10% de descuento en todas tus compras)",
+}
+
+
+async def _notify_vip_promotion(
+    context: ContextTypes.DEFAULT_TYPE,
+    telegram_id: int,
+    level: int,
+) -> None:
+    """Avisa al cliente que subió de nivel VIP."""
+    label = VIP_LEVEL_LABELS.get(int(level))
+    if not label:
+        return
+    try:
+        await context.bot.send_message(
+            telegram_id,
+            f"🏆 *¡Felicidades!* Subiste a *{label}*.\n\n"
+            "El descuento se aplica automáticamente en tu próxima compra.",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        log.exception("No se pudo notificar promoción VIP a %s", telegram_id)
 
 
 async def receive_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -503,6 +542,7 @@ async def receive_payment_proof(update: Update, context: ContextTypes.DEFAULT_TY
 async def show_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None:
         return
+    renew_buttons: list[tuple[int, str, int]] = []
     with session_scope() as session:
         user = get_or_create_user(
             session,
@@ -535,14 +575,48 @@ async def show_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         f"Cuenta entregada: `{_extract_account_label(o.delivered_credentials)}`"
                     )
                 lines.append("")
+                if o.status in (Order.STATUS_DELIVERED, Order.STATUS_EXPIRED):
+                    renew_buttons.append(
+                        (
+                            o.id,
+                            f"{o.plan.service.emoji} {o.plan.service.name} / {o.plan.name}",
+                            o.plan_id,
+                        )
+                    )
+            if renew_buttons:
+                lines.append("Toca *🔄 Renovar #N* para volver a comprar el mismo plan.")
             text = "\n".join(lines).rstrip()
+
+    inline_kb: InlineKeyboardMarkup | None = None
+    if renew_buttons:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    f"🔄 Renovar #{order_id}",
+                    callback_data=f"buy:{plan_id}",
+                )
+            ]
+            for order_id, _label, plan_id in renew_buttons[:8]
+        ]
+        inline_kb = InlineKeyboardMarkup(rows)
+
     if update.message is not None:
         await update.message.reply_text(
-            text, parse_mode="Markdown", reply_markup=main_menu()
+            text,
+            parse_mode="Markdown",
+            reply_markup=main_menu(),
         )
+        if inline_kb is not None:
+            await update.message.reply_text(
+                "🔄 *Renovar un pedido anterior*",
+                parse_mode="Markdown",
+                reply_markup=inline_kb,
+            )
     elif update.callback_query is not None:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, parse_mode="Markdown")
+        await update.callback_query.edit_message_text(
+            text, parse_mode="Markdown", reply_markup=inline_kb
+        )
 
 
 async def cmd_apply_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

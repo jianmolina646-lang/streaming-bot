@@ -32,6 +32,8 @@ class Settings:
     currency: str = "USD"
     payment_instructions: str = "Configura tus métodos de pago en .env"
     database_url: str = "sqlite:///shop.db"
+    vip_threshold_1: float = 100.0
+    vip_threshold_2: float = 300.0
 
 
 def load_settings() -> Settings:
@@ -50,4 +52,6 @@ def load_settings() -> Settings:
             "Configura tus métodos de pago en .env",
         ).replace("\\n", "\n"),
         database_url=os.getenv("DATABASE_URL", "sqlite:///shop.db"),
+        vip_threshold_1=float(os.getenv("VIP_THRESHOLD_1", "100") or 100),
+        vip_threshold_2=float(os.getenv("VIP_THRESHOLD_2", "300") or 300),
     )

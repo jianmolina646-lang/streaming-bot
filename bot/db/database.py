@@ -24,6 +24,7 @@ _MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("delivered_at", "DATETIME"),
         ("expires_at", "DATETIME"),
         ("expiry_reminded_at", "DATETIME"),
+        ("expiry_reminded_24h_at", "DATETIME"),
         ("expired_notified_at", "DATETIME"),
         ("cut_at", "DATETIME"),
         ("review_requested_at", "DATETIME"),

@@ -52,6 +52,44 @@ async def send_expiry_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.info("Recordatorios enviados: %s", sent)
 
 
+async def send_expiry_reminders_24h(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Avisa al cliente cuando falta ~1 día para que su suscripción venza."""
+    now = datetime.utcnow()
+    window_start = now + timedelta(hours=24 - 6)
+    window_end = now + timedelta(hours=24 + 6)
+    sent = 0
+    with session_scope() as session:
+        stmt = select(Order).where(
+            Order.status == Order.STATUS_DELIVERED,
+            Order.expires_at.isnot(None),
+            Order.expires_at >= window_start,
+            Order.expires_at <= window_end,
+            Order.expiry_reminded_24h_at.is_(None),
+        )
+        for order in session.scalars(stmt):
+            try:
+                txt = (
+                    "⚠️ *Tu suscripción vence mañana*\n\n"
+                    f"Plan: *{order.plan.service.name} — {order.plan.name}*\n\n"
+                    "Renueva ahora para no quedarte sin acceso. "
+                    "Si tienes saldo, se descuenta al toque."
+                )
+                await context.bot.send_message(
+                    order.user.telegram_id,
+                    txt,
+                    parse_mode="Markdown",
+                    reply_markup=renewal_keyboard(order.plan_id),
+                )
+                order.expiry_reminded_24h_at = now
+                sent += 1
+            except Exception:
+                log.exception(
+                    "Falló enviar recordatorio 24h del pedido %s", order.id
+                )
+    if sent:
+        log.info("Recordatorios 24h enviados: %s", sent)
+
+
 async def mark_expired_and_notify(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Marca como vencidos los pedidos cuya fecha de expiración ya pasó.
 

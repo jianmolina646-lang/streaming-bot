@@ -18,7 +18,11 @@ from bot.handlers import admin as admin_h
 from bot.handlers import catalog as catalog_h
 from bot.handlers import orders as orders_h
 from bot.handlers import start as start_h
-from bot.jobs import mark_expired_and_notify, send_expiry_reminders
+from bot.jobs import (
+    mark_expired_and_notify,
+    send_expiry_reminders,
+    send_expiry_reminders_24h,
+)
 from config import load_settings
 
 
@@ -149,6 +153,13 @@ def main() -> None:
             interval=timedelta(hours=6),
             first=timedelta(seconds=30),
             name="expiry-reminders",
+        )
+        # Aviso 24h antes (mismo patrón que el 3 días, con su propia bandera).
+        app.job_queue.run_repeating(
+            send_expiry_reminders_24h,
+            interval=timedelta(hours=3),
+            first=timedelta(seconds=45),
+            name="expiry-reminders-24h",
         )
         # Marca pedidos vencidos como expired y avisa cliente + admin para corte.
         app.job_queue.run_repeating(
