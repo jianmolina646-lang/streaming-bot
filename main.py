@@ -24,6 +24,7 @@ from bot.jobs import (
     send_expiry_reminders_24h,
 )
 from config import load_settings
+from bot.agent_api import start_agent_api
 
 
 def setup_logging() -> None:
@@ -146,6 +147,7 @@ def build_application() -> Application:
 def main() -> None:
     setup_logging()
     app = build_application()
+    agent_api = start_agent_api(app.bot_data["settings"])
     # Recordatorios de vencimiento: se ejecuta cada 6 horas y revisa pedidos
     # cuyo expires_at cae en ~3 días, para enviar al cliente un aviso de renovación.
     if app.job_queue is not None:
@@ -170,7 +172,11 @@ def main() -> None:
             name="expired-cutter",
         )
     logging.info("Bot iniciado. Esperando mensajes...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+    finally:
+        if agent_api is not None:
+            agent_api.shutdown()
 
 
 if __name__ == "__main__":

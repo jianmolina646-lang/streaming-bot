@@ -48,6 +48,7 @@ class AgentApi:
 
     def finish(self, job: AgentJob, result: JobResult) -> None:
         self._request("POST", f"jobs/{job.id}/result", {
+            "agent_name": self.config.name,
             "status": result.status.value,
             "message": result.message,
             "evidence": result.evidence or {},

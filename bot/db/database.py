@@ -75,6 +75,15 @@ def get_session() -> Session:
     return _SessionLocal()
 
 
+def close_db() -> None:
+    """Libera el pool actual (útil en apagado limpio y pruebas)."""
+    global _engine, _SessionLocal
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _SessionLocal = None
+
+
 @contextmanager
 def session_scope() -> Iterator[Session]:
     """Contexto que abre una sesión y hace commit/rollback automático."""

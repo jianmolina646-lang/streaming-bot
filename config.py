@@ -39,6 +39,9 @@ class Settings:
     premium_emoji_warning_id: str = ""
     premium_emoji_star_id: str = ""
     agent_encryption_key: str = ""
+    agent_api_token: str = ""
+    agent_api_host: str = "127.0.0.1"
+    agent_api_port: int = 8092
 
 
 def load_settings() -> Settings:
@@ -64,4 +67,7 @@ def load_settings() -> Settings:
         premium_emoji_warning_id=os.getenv("PREMIUM_EMOJI_WARNING_ID", "").strip(),
         premium_emoji_star_id=os.getenv("PREMIUM_EMOJI_STAR_ID", "").strip(),
         agent_encryption_key=os.getenv("AGENT_ENCRYPTION_KEY", "").strip(),
+        agent_api_token=os.getenv("AGENT_API_TOKEN", "").strip(),
+        agent_api_host=os.getenv("AGENT_API_HOST", "127.0.0.1").strip(),
+        agent_api_port=int(os.getenv("AGENT_API_PORT", "8092")),
     )
