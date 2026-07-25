@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from sqlalchemy import func, or_, select
-from telegram import Update
+from telegram import MessageEntity, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
 from bot.db.database import session_scope
@@ -23,6 +24,7 @@ from bot.services.catalog_service import (
 )
 from bot.services.faq_service import add_faq, delete_faq, list_all_faqs
 from bot.services.order_service import get_order, list_pending_orders
+from bot.premium_emoji import delivery_message, review_request, without_custom_emoji
 from bot.services.wallet_service import (
     add_balance as wallet_add_balance,
     list_top_balances,
@@ -99,6 +101,33 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/broadcast `<mensaje>` — enviar a todos los usuarios"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
+
+
+@admin_only
+async def cmd_emoji_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra los custom_emoji_id presentes en el mensaje o mensaje respondido."""
+    message = update.message
+    if message is None:
+        return
+    source = message.reply_to_message or message
+    entities = list(source.entities or ()) + list(source.caption_entities or ())
+    custom_ids = []
+    for entity in entities:
+        if (
+            entity.type == MessageEntity.CUSTOM_EMOJI
+            and entity.custom_emoji_id
+            and entity.custom_emoji_id not in custom_ids
+        ):
+            custom_ids.append(entity.custom_emoji_id)
+    if not custom_ids:
+        await message.reply_text(
+            "No encontré emojis Premium. Responde con /emojiid a un mensaje "
+            "que contenga uno o más emojis personalizados."
+        )
+        return
+    lines = ["IDs de emojis Premium encontrados:"]
+    lines.extend(f"{index}. `{custom_id}`" for index, custom_id in enumerate(custom_ids, 1))
+    await message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 # ---------- catálogo ----------
@@ -596,14 +625,15 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 settings.vip_threshold_2,
             )
             edit_text = f"✅ Pedido #{order_id} aprobado y entregado."
-            notify_text = (
-                f"🎉 *¡Tu pedido #{order_id} ha sido entregado!*\n\n"
-                f"Producto: {order.plan.service.emoji} {order.plan.service.name} — {order.plan.name}\n"
-                f"Duración: {order.plan.duration_days} días "
-                f"(vence el {order.expires_at:%Y-%m-%d})\n\n"
-                f"*Credenciales:*\n```\n{stock_item.credentials}\n```\n\n"
-                "⚠️ No compartas estos datos. Si tienes problemas usa /garantia "
-                f"{order_id}."
+            notify_text = delivery_message(
+                settings,
+                order_id=order_id,
+                product=(
+                    f"{order.plan.service.emoji} {order.plan.service.name} "
+                    f"— {order.plan.name} ({order.plan.duration_days} días)"
+                ),
+                credentials=stock_item.credentials,
+                expires=f"{order.expires_at:%Y-%m-%d}",
             )
             # Comprobar stock restante y avisar si es bajo.
             remaining = session.scalar(
@@ -636,9 +666,16 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if notify_user_id and notify_text:
         try:
-            await context.bot.send_message(
-                notify_user_id, notify_text, parse_mode="Markdown"
-            )
+            try:
+                await context.bot.send_message(
+                    notify_user_id, notify_text, parse_mode="HTML"
+                )
+            except BadRequest:
+                await context.bot.send_message(
+                    notify_user_id,
+                    without_custom_emoji(notify_text),
+                    parse_mode="HTML",
+                )
         except Exception:
             log.exception("No se pudo notificar al usuario %s", notify_user_id)
 
@@ -672,11 +709,21 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if notify_user_id:
             try:
                 from bot.keyboards import review_keyboard
-                await context.bot.send_message(
-                    notify_user_id,
-                    "🌟 ¿Cómo te fue con esta compra? Tu opinión nos ayuda.",
-                    reply_markup=review_keyboard(order_id),
-                )
+                review_text = review_request(settings)
+                try:
+                    await context.bot.send_message(
+                        notify_user_id,
+                        review_text,
+                        parse_mode="HTML",
+                        reply_markup=review_keyboard(order_id),
+                    )
+                except BadRequest:
+                    await context.bot.send_message(
+                        notify_user_id,
+                        without_custom_emoji(review_text),
+                        parse_mode="HTML",
+                        reply_markup=review_keyboard(order_id),
+                    )
             except Exception:
                 log.exception("No se pudo pedir reseña")
         if promoted_to_level is not None and notify_user_id:

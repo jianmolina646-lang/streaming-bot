@@ -58,6 +58,7 @@ def build_application() -> Application:
 
     # Comandos admin.
     app.add_handler(CommandHandler("admin", admin_h.cmd_admin))
+    app.add_handler(CommandHandler("emojiid", admin_h.cmd_emoji_id))
     app.add_handler(CommandHandler("addservice", admin_h.cmd_add_service))
     app.add_handler(CommandHandler("listservices", admin_h.cmd_list_services))
     app.add_handler(CommandHandler("editservice", admin_h.cmd_edit_service))

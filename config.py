@@ -34,6 +34,10 @@ class Settings:
     database_url: str = "sqlite:///shop.db"
     vip_threshold_1: float = 100.0
     vip_threshold_2: float = 300.0
+    premium_emoji_success_id: str = ""
+    premium_emoji_key_id: str = ""
+    premium_emoji_warning_id: str = ""
+    premium_emoji_star_id: str = ""
 
 
 def load_settings() -> Settings:
@@ -54,4 +58,8 @@ def load_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", "sqlite:///shop.db"),
         vip_threshold_1=float(os.getenv("VIP_THRESHOLD_1", "100") or 100),
         vip_threshold_2=float(os.getenv("VIP_THRESHOLD_2", "300") or 300),
+        premium_emoji_success_id=os.getenv("PREMIUM_EMOJI_SUCCESS_ID", "").strip(),
+        premium_emoji_key_id=os.getenv("PREMIUM_EMOJI_KEY_ID", "").strip(),
+        premium_emoji_warning_id=os.getenv("PREMIUM_EMOJI_WARNING_ID", "").strip(),
+        premium_emoji_star_id=os.getenv("PREMIUM_EMOJI_STAR_ID", "").strip(),
     )

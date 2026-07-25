@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from bot.db.database import session_scope
@@ -18,6 +19,7 @@ from bot.keyboards import (
     payment_method_keyboard,
     review_keyboard,
 )
+from bot.premium_emoji import delivery_message, review_request, without_custom_emoji
 from bot.services.vip_service import maybe_promote_vip
 from bot.services.catalog_service import get_plan, take_stock
 from bot.services.coupon_service import (
@@ -388,25 +390,40 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text(error)
         return
 
-    msg = (
-        f"🎉 *¡Compra completada con éxito!*\n\n"
-        f"Pedido: *#{order_id}*\n"
-        f"Producto: {plan_label}\n"
-        f"Importe cobrado: *{final_price:.2f} {settings.currency}*\n"
-        f"Vencimiento: *{_fmt_dt(expires_at)}*\n\n"
-        f"*Tus credenciales*\n```\n{delivered_text}\n```\n\n"
-        "⚠️ Guarda esta información. Si algo falla, usa /garantia "
-        f"{order_id} para abrir un ticket."
+    msg = delivery_message(
+        settings,
+        order_id=order_id,
+        product=plan_label,
+        credentials=delivered_text,
+        expires=_fmt_dt(expires_at),
+        amount=f"{final_price:.2f} {settings.currency}",
     )
-    await query.edit_message_text(msg, parse_mode="Markdown")
+    try:
+        await query.edit_message_text(msg, parse_mode="HTML")
+    except BadRequest:
+        log.warning("Telegram rechazó un custom emoji; usando fallback Unicode")
+        await query.edit_message_text(
+            without_custom_emoji(msg),
+            parse_mode="HTML",
+        )
 
     if order_id is not None:
         try:
-            await context.bot.send_message(
-                tg_user.id,
-                "🌟 ¿Cómo te fue con esta compra? Tu opinión nos ayuda.",
-                reply_markup=review_keyboard(order_id),
-            )
+            review_text = review_request(settings)
+            try:
+                await context.bot.send_message(
+                    tg_user.id,
+                    review_text,
+                    parse_mode="HTML",
+                    reply_markup=review_keyboard(order_id),
+                )
+            except BadRequest:
+                await context.bot.send_message(
+                    tg_user.id,
+                    without_custom_emoji(review_text),
+                    parse_mode="HTML",
+                    reply_markup=review_keyboard(order_id),
+                )
         except Exception:
             log.exception("No se pudo pedir reseña")
 

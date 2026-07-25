@@ -62,6 +62,30 @@ En Telegram, abre tu bot y envía `/start`.
 
 ---
 
+## Emojis Premium en entregas
+
+El bot puede usar emojis personalizados en mensajes de entrega si la cuenta
+propietaria del bot tiene Telegram Premium. La función es opcional: si no se
+configura o Telegram rechaza un ID, el bot reintenta automáticamente con emojis
+Unicode normales para no interrumpir una venta.
+
+1. Desde la cuenta administradora, envía al bot un mensaje con los emojis
+   Premium que quieras usar.
+2. Responde a ese mensaje con `/emojiid`.
+3. Copia los IDs obtenidos en el `.env`:
+
+```env
+PREMIUM_EMOJI_SUCCESS_ID=ID_DEL_EMOJI_DE_EXITO
+PREMIUM_EMOJI_KEY_ID=ID_DEL_EMOJI_DE_CREDENCIALES
+PREMIUM_EMOJI_WARNING_ID=ID_DEL_EMOJI_DE_ADVERTENCIA
+PREMIUM_EMOJI_STAR_ID=ID_DEL_EMOJI_DE_RESEÑA
+```
+
+Reinicia el bot después de modificar el `.env`. Nunca publiques el token del
+bot ni el archivo `.env`.
+
+---
+
 ## 5. Comandos del cliente
 
 | Comando | Descripción |
