@@ -161,6 +161,53 @@ class Order(Base):
     plan: Mapped[Plan] = relationship(back_populates="orders")
 
 
+class AutomationAgent(Base):
+    """Agente local emparejado. El token se almacena únicamente como hash."""
+
+    __tablename__ = "automation_agents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
+    capabilities: Mapped[str] = mapped_column(Text, default="[]")
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AutomationJob(Base):
+    """Trabajo de automatización vinculado inequívocamente a un pedido."""
+
+    __tablename__ = "automation_jobs"
+
+    STATUS_QUEUED = "queued"
+    STATUS_CLAIMED = "claimed"
+    STATUS_RUNNING = "running"
+    STATUS_NEEDS_ATTENTION = "needs_attention"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_FAILED = "failed"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), unique=True, index=True)
+    stock_item_id: Mapped[int] = mapped_column(ForeignKey("stock.id"))
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("automation_agents.id"), nullable=True, index=True)
+    service: Mapped[str] = mapped_column(String(32), default="netflix")
+    action: Mapped[str] = mapped_column(String(40), default="create_profile")
+    profile_name: Mapped[str] = mapped_column(String(80))
+    profile_pin_hash: Mapped[str] = mapped_column(String(64))
+    profile_pin_encrypted: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default=STATUS_QUEUED, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    result_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[str] = mapped_column(Text, default="{}")
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Faq(Base):
     """Pregunta y respuesta del soporte automatizado."""
 

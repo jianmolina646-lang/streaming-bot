@@ -23,6 +23,7 @@ from bot.services.catalog_service import (
     take_stock,
 )
 from bot.services.faq_service import add_faq, delete_faq, list_all_faqs
+from bot.services.automation_service import create_profile_job, is_automation_stock
 from bot.services.order_service import get_order, list_pending_orders
 from bot.premium_emoji import delivery_message, review_request, without_custom_emoji
 from bot.services.wallet_service import (
@@ -604,6 +605,33 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.answer("Sin stock disponible para entregar", show_alert=True)
                 return
             now = datetime.utcnow()
+            if is_automation_stock(stock_item):
+                if not settings.agent_encryption_key:
+                    stock_item.is_sold = False
+                    await query.answer(
+                        "Falta configurar AGENT_ENCRYPTION_KEY", show_alert=True
+                    )
+                    return
+                job = create_profile_job(
+                    session,
+                    order=order,
+                    stock_item=stock_item,
+                    encryption_key=settings.agent_encryption_key,
+                )
+                await query.answer("Perfil enviado al agente")
+                await query.edit_message_text(
+                    f"🤖 Pedido #{order_id} aprobado.\n"
+                    f"Trabajo `{job.id}` en cola para crear el perfil "
+                    f"*{job.profile_name}*.",
+                    parse_mode="Markdown",
+                )
+                await context.bot.send_message(
+                    notify_user_id,
+                    f"✅ Tu pago del pedido #{order_id} fue aprobado.\n\n"
+                    "🤖 Estamos preparando tu perfil de Netflix. "
+                    "Te enviaremos el nombre y PIN cuando quede verificado.",
+                )
+                return
             order.status = Order.STATUS_DELIVERED
             order.delivered_credentials = stock_item.credentials
             order.delivered_at = now

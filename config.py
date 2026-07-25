@@ -38,6 +38,7 @@ class Settings:
     premium_emoji_key_id: str = ""
     premium_emoji_warning_id: str = ""
     premium_emoji_star_id: str = ""
+    agent_encryption_key: str = ""
 
 
 def load_settings() -> Settings:
@@ -62,4 +63,5 @@ def load_settings() -> Settings:
         premium_emoji_key_id=os.getenv("PREMIUM_EMOJI_KEY_ID", "").strip(),
         premium_emoji_warning_id=os.getenv("PREMIUM_EMOJI_WARNING_ID", "").strip(),
         premium_emoji_star_id=os.getenv("PREMIUM_EMOJI_STAR_ID", "").strip(),
+        agent_encryption_key=os.getenv("AGENT_ENCRYPTION_KEY", "").strip(),
     )

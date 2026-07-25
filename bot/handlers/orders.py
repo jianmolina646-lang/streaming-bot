@@ -21,6 +21,7 @@ from bot.keyboards import (
 )
 from bot.premium_emoji import delivery_message, review_request, without_custom_emoji
 from bot.services.vip_service import maybe_promote_vip
+from bot.services.automation_service import is_automation_stock
 from bot.services.catalog_service import get_plan, take_stock
 from bot.services.coupon_service import (
     compute_discount,
@@ -333,6 +334,12 @@ async def cb_pay_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     stock_item = take_stock(session, plan.id)
                     if stock_item is None:
                         error = "⛔ Sin stock disponible. Intenta más tarde."
+                    elif is_automation_stock(stock_item):
+                        stock_item.is_sold = False
+                        error = (
+                            "Este plan automático requiere revisión del pago. "
+                            "Selecciona el método de pago manual."
+                        )
                     else:
                         now = datetime.utcnow()
                         order = create_order(session, user, plan)
