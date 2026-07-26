@@ -122,6 +122,10 @@ class NetflixAdapter:
                             path=str(diagnostics_dir / f"{job.id}.png"),
                             full_page=True,
                         )
+                        (diagnostics_dir / f"{job.id}.html").write_text(
+                            page.content(),
+                            encoding="utf-8",
+                        )
                     except Exception:
                         pass
                     raise
@@ -269,11 +273,7 @@ class NetflixAdapter:
         page.wait_for_timeout(1500)
         if not page.get_by_text(job.profile_name, exact=True).first.is_visible(timeout=2500):
             raise NetflixFlowError("Netflix no confirmó la creación del perfil.")
-        try:
-            self._set_profile_pin(page, job)
-        except Exception:
-            self._rollback_profile(page, job.profile_name)
-            raise
+        self._set_profile_pin(page, job)
         return True
 
     def _set_profile_pin(self, page: Page, job: AgentJob) -> None:
@@ -360,25 +360,3 @@ class NetflixAdapter:
         profile = page.get_by_text(job.profile_name, exact=True).first
         if not profile.is_visible(timeout=2200):
             raise NetflixFlowError("No fue posible verificar el perfil después de guardar el PIN.")
-
-    def _rollback_profile(self, page: Page, profile_name: str) -> None:
-        """Mejor esfuerzo: elimina el perfil recién creado si falló el PIN."""
-        try:
-            page.goto("https://www.netflix.com/ManageProfiles", wait_until="domcontentloaded")
-            profile = page.get_by_text(profile_name, exact=True).first
-            if not profile.is_visible(timeout=1500):
-                return
-            profile.click()
-            delete = page.get_by_text(
-                re.compile(r"(delete profile|eliminar perfil)", re.I)
-            ).first
-            if delete.is_visible(timeout=1500):
-                delete.click()
-                confirm = page.get_by_text(
-                    re.compile(r"(delete profile|eliminar perfil)", re.I)
-                ).last
-                if confirm.is_visible(timeout=1000):
-                    confirm.click()
-        except Exception:
-            # El resultado seguirá siendo NEEDS_ATTENTION y nunca se afirmará éxito.
-            return
