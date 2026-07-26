@@ -71,7 +71,10 @@ class NetflixAdapter:
         except Exception as exc:
             return JobResult(
                 status=JobStatus.FAILED,
-                message=f"Error controlado del agente: {type(exc).__name__}",
+                message=(
+                    f"Error controlado del agente: {type(exc).__name__}: "
+                    f"{str(exc)[:300]}"
+                ),
                 evidence={"dry_run": False, "stage": "unexpected"},
             )
 

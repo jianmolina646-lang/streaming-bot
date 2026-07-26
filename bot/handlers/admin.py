@@ -604,6 +604,8 @@ async def cmd_agent_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     f"• `{job.id[:8]}` · pedido #{job.order_id} · "
                     f"{job.profile_name} · *{job.status}*"
                 )
+                if job.result_message:
+                    lines.append(f"  ↳ {job.result_message[:240]}")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 

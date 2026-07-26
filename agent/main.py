@@ -34,7 +34,12 @@ def run() -> None:
             job = api.claim_next()
             if job:
                 print(f"Trabajo {job.id}: {job.action} para {job.profile_name}", flush=True)
-                api.finish(job, adapter.execute(job))
+                result = adapter.execute(job)
+                print(
+                    f"Resultado {job.id[:8]}: {result.status.value} · {result.message}",
+                    flush=True,
+                )
+                api.finish(job, result)
         except Exception as exc:
             print(f"Agente temporalmente desconectado: {exc}", flush=True)
         time.sleep(config.poll_seconds)
