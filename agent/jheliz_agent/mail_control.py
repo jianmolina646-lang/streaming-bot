@@ -37,6 +37,14 @@ class MailControlClient:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                # Cloudflare bloquea la firma predeterminada Python-urllib (1010).
+                # La seguridad real sigue siendo el token Bearer de 256 bits.
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36 JhelizAgent/1.0"
+                ),
             },
         )
         try:
