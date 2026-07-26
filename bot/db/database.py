@@ -31,6 +31,7 @@ _MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("payment_method", "VARCHAR(16) DEFAULT 'manual'"),
         ("discount_amount", "FLOAT DEFAULT 0.0"),
         ("coupon_id", "INTEGER"),
+        ("automation_stock_id", "INTEGER"),
     ],
     "users": [
         ("balance", "FLOAT DEFAULT 0.0"),

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from sqlalchemy import func, or_, select
-from telegram import MessageEntity, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
@@ -757,24 +757,25 @@ async def cb_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         "Falta configurar AGENT_ENCRYPTION_KEY", show_alert=True
                     )
                     return
-                job = create_profile_job(
-                    session,
-                    order=order,
-                    stock_item=stock_item,
-                    encryption_key=settings.agent_encryption_key,
-                )
-                await query.answer("Perfil enviado al agente")
+                order.status = Order.STATUS_APPROVED
+                order.automation_stock_id = stock_item.id
+                order.admin_note = "Esperando nombre y PIN elegidos por el cliente."
+                await query.answer("Pago aprobado; esperando configuración")
                 await query.edit_message_text(
-                    f"🤖 Pedido #{order_id} aprobado.\n"
-                    f"Trabajo `{job.id}` en cola para crear el perfil "
-                    f"*{job.profile_name}*.",
+                    f"✅ Pedido #{order_id} aprobado.\n"
+                    "Esperando que el cliente elija nombre y PIN.",
                     parse_mode="Markdown",
                 )
                 await context.bot.send_message(
                     notify_user_id,
                     f"✅ Tu pago del pedido #{order_id} fue aprobado.\n\n"
-                    "🤖 Estamos preparando tu perfil de Netflix. "
-                    "Te enviaremos el nombre y PIN cuando quede verificado.",
+                    "Configura el nombre y PIN antes de preparar tu perfil:",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "👤 Configurar mi perfil",
+                            callback_data=f"nfx:customer:{order_id}",
+                        )
+                    ]]),
                 )
                 return
             order.status = Order.STATUS_DELIVERED

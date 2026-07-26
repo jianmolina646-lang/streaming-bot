@@ -16,7 +16,7 @@ from bot.db.models import AutomationAgent, AutomationJob, Order, Plan, Service, 
 from bot.services.automation_service import AUTOMATION_STOCK_TAG, create_profile_job
 from bot.services.catalog_service import add_plan, add_service
 
-ADD_EMAIL, TEST_NAME, TEST_PIN = range(3)
+ADD_EMAIL, TEST_NAME, TEST_PIN, CUSTOMER_NAME, CUSTOMER_PIN = range(5)
 EMAIL_RE = re.compile(r"(?i)^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$")
 
 
@@ -311,6 +311,135 @@ async def receive_pin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
+async def start_customer_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    order_id = int(update.callback_query.data.rsplit(":", 1)[1])
+    with session_scope() as session:
+        order = session.get(Order, order_id)
+        valid = bool(
+            order and update.effective_user
+            and order.user.telegram_id == update.effective_user.id
+            and order.status == Order.STATUS_APPROVED
+            and order.automation_stock_id
+        )
+    if not valid:
+        await update.callback_query.answer(
+            "Este pedido no está disponible para tu cuenta.", show_alert=True
+        )
+        return ConversationHandler.END
+    await update.callback_query.answer()
+    context.user_data["nfx_customer_order_id"] = order_id
+    await update.callback_query.edit_message_text(
+        "👤 *Configura tu perfil*\n\nEscribe el nombre que deseas usar.",
+        parse_mode="Markdown",
+    )
+    return CUSTOMER_NAME
+
+
+async def customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name = (update.message.text or "").strip()
+    if not name or len(name) > 80:
+        await update.message.reply_text("Escribe un nombre de 1 a 80 caracteres.")
+        return CUSTOMER_NAME
+    context.user_data["nfx_customer_name"] = name
+    await update.message.reply_text(
+        "🔐 Ahora escribe un PIN de exactamente 4 números.\n"
+        "El PIN será cifrado y no aparecerá en registros."
+    )
+    return CUSTOMER_PIN
+
+
+async def customer_pin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    pin = (update.message.text or "").strip()
+    if not (pin.isdigit() and len(pin) == 4):
+        await update.message.reply_text("El PIN debe tener exactamente 4 números.")
+        return CUSTOMER_PIN
+    order_id = context.user_data.get("nfx_customer_order_id")
+    settings = _settings(context)
+    with session_scope() as session:
+        order = session.get(Order, order_id)
+        if (
+            not order or not update.effective_user
+            or order.user.telegram_id != update.effective_user.id
+            or order.status != Order.STATUS_APPROVED
+            or not order.automation_stock_id
+        ):
+            await update.message.reply_text("Este pedido ya no puede configurarse.")
+            return ConversationHandler.END
+        item = session.get(StockItem, order.automation_stock_id)
+        if not item:
+            await update.message.reply_text("La cuenta reservada ya no está disponible.")
+            return ConversationHandler.END
+        try:
+            create_profile_job(
+                session, order=order, stock_item=item,
+                encryption_key=settings.agent_encryption_key,
+                profile_name=context.user_data["nfx_customer_name"],
+                profile_pin=pin,
+            )
+        except ValueError as exc:
+            await update.message.reply_text(str(exc))
+            return ConversationHandler.END
+        order.admin_note = "Perfil configurado por el cliente y enviado al agente."
+    context.user_data.pop("nfx_customer_order_id", None)
+    context.user_data.pop("nfx_customer_name", None)
+    await update.message.reply_text(
+        "✅ *Configuración recibida*\n\n"
+        "Estamos creando tu perfil. Te avisaremos cuando quede verificado.",
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
+
+async def reconfigure_existing(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Recupera pedidos creados por la versión anterior al flujo de preferencias."""
+    if not await _authorized(update, context):
+        return ConversationHandler.END
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Uso: /reconfigurarperfil <número de pedido>")
+        return ConversationHandler.END
+    order_id = int(context.args[0])
+    with session_scope() as session:
+        order = session.get(Order, order_id)
+        job = session.scalar(
+            select(AutomationJob).where(AutomationJob.order_id == order_id)
+        )
+        if not order:
+            await update.message.reply_text("Pedido no encontrado.")
+            return ConversationHandler.END
+        if job and job.status == AutomationJob.STATUS_SUCCEEDED:
+            await update.message.reply_text(
+                "Ese trabajo ya terminó; no se modificó para evitar duplicados."
+            )
+            return ConversationHandler.END
+        stock_id = order.automation_stock_id or (job.stock_item_id if job else None)
+        if not stock_id:
+            await update.message.reply_text("El pedido no tiene una cuenta reservada.")
+            return ConversationHandler.END
+        if job:
+            session.delete(job)
+            session.flush()
+        order.status = Order.STATUS_APPROVED
+        order.automation_stock_id = stock_id
+        order.admin_note = "Esperando nueva configuración del cliente."
+        telegram_id = order.user.telegram_id
+    button = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "👤 Configurar mi perfil", callback_data=f"nfx:customer:{order_id}"
+        )
+    ]])
+    await context.bot.send_message(
+        telegram_id,
+        f"✅ Configura nuevamente el perfil del pedido #{order_id}:",
+        reply_markup=button,
+    )
+    await update.message.reply_text(
+        f"✅ Pedido #{order_id} reiniciado. Se envió el botón al cliente."
+    )
+    return ConversationHandler.END
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("nfx_order_id", None)
     context.user_data.pop("nfx_stock_id", None)
@@ -323,6 +452,7 @@ def build_conversation() -> ConversationHandler:
     entries = [
         CommandHandler("netflix", show_menu),
         CommandHandler("netflixadmin", show_menu),
+        CommandHandler("reconfigurarperfil", reconfigure_existing),
         CallbackQueryHandler(show_menu, pattern=r"^nfx:menu$"),
         CallbackQueryHandler(start_add, pattern=r"^nfx:add$"),
         CallbackQueryHandler(list_accounts, pattern=r"^nfx:list$"),
@@ -330,6 +460,7 @@ def build_conversation() -> ConversationHandler:
         CallbackQueryHandler(start_test, pattern=r"^nfx:test$"),
         CallbackQueryHandler(select_order, pattern=r"^nfx:order:\d+$"),
         CallbackQueryHandler(select_stock, pattern=r"^nfx:stock:\d+:\d+$"),
+        CallbackQueryHandler(start_customer_profile, pattern=r"^nfx:customer:\d+$"),
     ]
     return ConversationHandler(
         entry_points=entries,
@@ -340,6 +471,12 @@ def build_conversation() -> ConversationHandler:
             ],
             TEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
             TEST_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_pin)],
+            CUSTOMER_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, customer_name)
+            ],
+            CUSTOMER_PIN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, customer_pin)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True, per_user=True, per_chat=True,

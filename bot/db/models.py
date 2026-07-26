@@ -152,6 +152,9 @@ class Order(Base):
     expired_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cut_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     review_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    automation_stock_id: Mapped[int | None] = mapped_column(
+        ForeignKey("stock.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
