@@ -26,8 +26,8 @@ playwright install chromium
 Copy-Item .env.example .env
 ```
 
-Las variables se cargarán desde el proceso o desde el futuro instalador. No
-subas `.env`, perfiles de navegador ni tokens al repositorio.
+El agente carga automáticamente `agent/.env`. No subas `.env`, perfiles de
+navegador ni tokens al repositorio.
 
 ## Pruebas
 
