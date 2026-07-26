@@ -273,12 +273,26 @@ class NetflixAdapter:
             )
         profile.click()
         page.wait_for_timeout(1200)
-        lock = page.get_by_text(
-            re.compile(r"(profile lock|bloqueo de perfil)", re.I)
+        lock_label = page.get_by_text(
+            re.compile(r"^(profile lock|bloqueo de perfil)$", re.I)
         ).first
-        if not lock.is_visible(timeout=2500):
+        if not lock_label.is_visible(timeout=2500):
             raise NetflixFlowError("Netflix no mostró la opción Bloqueo de perfil.")
-        lock.click()
+        lock_control = lock_label.locator(
+            "xpath=ancestor-or-self::*[self::a or self::button or @role='button'][1]"
+        )
+        if lock_control.count() and lock_control.first.is_visible():
+            lock_control.first.click()
+        else:
+            # En algunas variantes la tarjeta es un div con listener.
+            lock_label.locator("xpath=..").click()
+        page.wait_for_timeout(1400)
+        if page.get_by_text(
+            re.compile(r"^manage profile and preferences$", re.I)
+        ).first.is_visible(timeout=700):
+            # Segundo intento sobre el contenedor ancho de la fila.
+            lock_label.locator("xpath=../..").click()
+            page.wait_for_timeout(1400)
 
         create_lock = page.get_by_text(
             re.compile(r"(create.*profile lock|crear.*bloqueo|add.*pin|agregar.*pin)", re.I)
