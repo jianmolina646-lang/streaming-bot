@@ -14,6 +14,7 @@ VALID_JOB = {
     "profile_name": "Juan",
     "profile_pin": "4025",
     "account_reference": "account-17",
+    "account_email": "netflix@example.com",
     "expires_at": "2026-07-25T23:00:00Z",
 }
 
@@ -32,6 +33,7 @@ class AgentTests(unittest.TestCase):
             api_url="https://example.test", token="x" * 40,
             name="test", dry_run=True, poll_seconds=5,
             browser="chromium", headless=False,
+            mail_control_url="", mail_control_token="",
         )
         result = NetflixAdapter(config).execute(AgentJob.from_payload(VALID_JOB))
         self.assertEqual(result.status, JobStatus.SUCCEEDED)
@@ -42,6 +44,7 @@ class AgentTests(unittest.TestCase):
             api_url="https://example.test", token="x" * 40,
             name="test", dry_run=False, poll_seconds=5,
             browser="chromium", headless=False,
+            mail_control_url="", mail_control_token="",
         )
         result = NetflixAdapter(config).execute(AgentJob.from_payload(VALID_JOB))
         self.assertEqual(result.status, JobStatus.NEEDS_ATTENTION)

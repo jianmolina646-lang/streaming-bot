@@ -25,6 +25,8 @@ class AgentConfig:
     poll_seconds: int
     browser: str
     headless: bool
+    mail_control_url: str
+    mail_control_token: str
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -36,6 +38,8 @@ class AgentConfig:
             poll_seconds=max(2, int(os.getenv("JHELIZ_AGENT_POLL_SECONDS", "5"))),
             browser=os.getenv("JHELIZ_AGENT_BROWSER", "chromium").strip().lower(),
             headless=_boolean("JHELIZ_AGENT_HEADLESS", False),
+            mail_control_url=os.getenv("MAIL_CONTROL_API_URL", "").strip().rstrip("/"),
+            mail_control_token=os.getenv("MAIL_CONTROL_AGENT_TOKEN", "").strip(),
         )
         if not config.api_url.startswith("https://"):
             raise ValueError("JHELIZ_AGENT_API_URL debe utilizar HTTPS")
@@ -43,4 +47,8 @@ class AgentConfig:
             raise ValueError("JHELIZ_AGENT_TOKEN no está configurado o es demasiado corto")
         if config.browser not in {"chromium", "chrome", "msedge"}:
             raise ValueError("JHELIZ_AGENT_BROWSER debe ser chromium, chrome o msedge")
+        if bool(config.mail_control_url) != bool(config.mail_control_token):
+            raise ValueError("MAIL_CONTROL_API_URL y MAIL_CONTROL_AGENT_TOKEN deben configurarse juntos")
+        if config.mail_control_url and not config.mail_control_url.startswith("https://"):
+            raise ValueError("MAIL_CONTROL_API_URL debe utilizar HTTPS")
         return config

@@ -21,7 +21,8 @@ def run() -> None:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     mode = "SIMULACIÓN" if config.dry_run else "REAL BLOQUEADO"
-    print(f"Jheliz Agent conectado como {config.name} · modo {mode}", flush=True)
+    mail_mode = "Mail Control conectado" if adapter.mail_control.enabled else "Mail Control pendiente"
+    print(f"Jheliz Agent conectado como {config.name} · modo {mode} · {mail_mode}", flush=True)
 
     last_heartbeat = 0.0
     while running:

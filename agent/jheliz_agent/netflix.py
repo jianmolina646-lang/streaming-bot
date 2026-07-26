@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .config import AgentConfig
+from .mail_control import MailControlClient
 from .models import AgentJob, JobResult, JobStatus
 
 
@@ -14,6 +15,7 @@ class NetflixAdapter:
 
     def __init__(self, config: AgentConfig):
         self.config = config
+        self.mail_control = MailControlClient(config)
 
     def execute(self, job: AgentJob) -> JobResult:
         if not self.config.dry_run:
@@ -34,5 +36,6 @@ class NetflixAdapter:
                 "profile_name": job.profile_name,
                 "pin_length": len(job.profile_pin),
                 "account_reference": job.account_reference,
+                "mail_control_ready": self.mail_control.enabled and bool(job.account_email),
             },
         )

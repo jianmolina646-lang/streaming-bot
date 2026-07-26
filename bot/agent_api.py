@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,7 +19,7 @@ from typing import Any
 from sqlalchemy import select
 
 from bot.db.database import session_scope
-from bot.db.models import AutomationAgent, AutomationJob
+from bot.db.models import AutomationAgent, AutomationJob, StockItem
 from bot.services.automation_service import decrypt_profile_pin
 from config import Settings
 
@@ -155,6 +156,11 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             job.status = AutomationJob.STATUS_CLAIMED
             job.claimed_at = datetime.utcnow()
             job.attempts += 1
+            stock = session.get(StockItem, job.stock_item_id)
+            email_match = re.search(
+                r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+                stock.credentials if stock else "",
+            )
             return {"job": {
                 "id": job.id,
                 "service": job.service,
@@ -164,6 +170,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                     job, self.server.settings.agent_encryption_key
                 ),
                 "account_reference": str(job.stock_item_id),
+                "account_email": email_match.group(0).lower() if email_match else "",
                 "expires_at": job.expires_at.isoformat() + "Z",
             }}
 
