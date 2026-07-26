@@ -240,7 +240,15 @@ class NetflixAdapter:
         save = _first_visible(page, (
             'button[type="submit"]',
             '[data-uia="profile-save-button"]',
+            'button:has-text("Save")',
+            'button:has-text("Guardar")',
         ))
+        if save is None:
+            save_by_role = page.get_by_role(
+                "button", name=re.compile(r"^(save|guardar)$", re.I)
+            ).first
+            if save_by_role.is_visible(timeout=1500):
+                save = save_by_role
         if save is None:
             raise NetflixFlowError("No se encontró el botón para guardar el perfil.")
         save.click()
