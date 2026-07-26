@@ -80,6 +80,8 @@ class NetflixAdapter:
 
     def _execute_real(self, job: AgentJob) -> JobResult:
         profile_dir = str(Path(self.config.browser_profile_dir).resolve())
+        diagnostics_dir = Path(profile_dir).parent / "diagnostics"
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as playwright:
             browser_type = (
                 playwright.chromium
@@ -96,8 +98,18 @@ class NetflixAdapter:
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.set_default_timeout(10_000)
-                self._ensure_login(page, job)
-                self._create_profile_with_pin(page, job)
+                try:
+                    self._ensure_login(page, job)
+                    self._create_profile_with_pin(page, job)
+                except Exception:
+                    try:
+                        page.screenshot(
+                            path=str(diagnostics_dir / f"{job.id}.png"),
+                            full_page=True,
+                        )
+                    except Exception:
+                        pass
+                    raise
                 return JobResult(
                     status=JobStatus.SUCCEEDED,
                     message=f"Perfil {job.profile_name} verificado con PIN configurado.",
@@ -157,13 +169,44 @@ class NetflixAdapter:
         if code_input is None:
             raise NetflixFlowError("Llegó el código, pero Netflix cambió la pantalla de verificación.")
         code_input.fill(code)
-        submit = _first_visible(page, ('button[type="submit"]', '[data-uia="login-submit-button"]'))
+        # Netflix puede confirmar automáticamente al completar el código.
+        page.wait_for_timeout(1800)
+        if "login" not in page.url.lower():
+            return
+        submit = _first_visible(page, (
+            'button[type="submit"]',
+            '[data-uia="login-submit-button"]',
+            '[data-uia="verify-code-button"]',
+        ))
         if submit is None:
-            raise NetflixFlowError("No se encontró el botón para confirmar el código.")
-        submit.click()
-        page.wait_for_load_state("domcontentloaded")
+            submit_text = page.get_by_text(
+                re.compile(
+                    r"(sign in|log in|continue|verify|submit|"
+                    r"iniciar sesi[oó]n|continuar|verificar|confirmar)",
+                    re.I,
+                )
+            ).first
+            if submit_text.is_visible(timeout=1500):
+                submit = submit_text
+        if submit is not None:
+            submit.click()
+        else:
+            # Algunos formularios no tienen botón accesible y responden a Enter.
+            code_input.press("Enter")
+        try:
+            page.wait_for_url(re.compile(r"^(?!.*\/login).*$", re.I), timeout=12_000)
+        except PlaywrightTimeout:
+            pass
+        page.wait_for_timeout(1000)
         if "login" in page.url.lower():
-            raise NetflixFlowError("Netflix rechazó el código de acceso.")
+            error = page.locator(
+                '[role="alert"], [data-uia*="error"], .ui-message-error'
+            ).first
+            detail = error.inner_text().strip()[:180] if error.is_visible() else ""
+            raise NetflixFlowError(
+                "Netflix no completó el acceso con el código."
+                + (f" Mensaje: {detail}" if detail else "")
+            )
 
     def _create_profile_with_pin(self, page: Page, job: AgentJob) -> None:
         page.goto("https://www.netflix.com/ManageProfiles", wait_until="domcontentloaded")

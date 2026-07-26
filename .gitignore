@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .env
 agent/browser-profile/
+agent/diagnostics/
 *.db
 *.sqlite
 *.sqlite3
