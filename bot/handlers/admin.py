@@ -11,7 +11,17 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
 from bot.db.database import session_scope
-from bot.db.models import Faq, Order, Plan, Service, StockItem, User, WalletTransaction
+from bot.db.models import (
+    AutomationAgent,
+    AutomationJob,
+    Faq,
+    Order,
+    Plan,
+    Service,
+    StockItem,
+    User,
+    WalletTransaction,
+)
 from bot.services.catalog_service import (
     add_plan,
     add_service,
@@ -23,7 +33,12 @@ from bot.services.catalog_service import (
     take_stock,
 )
 from bot.services.faq_service import add_faq, delete_faq, list_all_faqs
-from bot.services.automation_service import create_profile_job, is_automation_stock
+from bot.services.automation_service import (
+    AUTOMATION_STOCK_TAG,
+    create_profile_job,
+    generate_profile_pin,
+    is_automation_stock,
+)
 from bot.services.order_service import get_order, list_pending_orders
 from bot.premium_emoji import delivery_message, review_request, without_custom_emoji
 from bot.services.wallet_service import (
@@ -558,6 +573,136 @@ async def cmd_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if order.delivered_credentials:
             text += f"\nCredenciales entregadas:\n`{order.delivered_credentials}`"
     await update.message.reply_text(text, parse_mode="Markdown")
+
+
+@admin_only
+async def cmd_agent_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra agentes emparejados y los últimos trabajos sin revelar secretos."""
+    with session_scope() as session:
+        agents = list(session.scalars(
+            select(AutomationAgent).order_by(AutomationAgent.created_at.desc()).limit(10)
+        ))
+        jobs = list(session.scalars(
+            select(AutomationJob).order_by(AutomationJob.created_at.desc()).limit(10)
+        ))
+        lines = ["🤖 *Agente de automatización*", ""]
+        if not agents:
+            lines.append("Agentes: ninguno conectado todavía.")
+        else:
+            lines.append("*Agentes:*")
+            for agent in agents:
+                seen = agent.last_seen_at.strftime("%Y-%m-%d %H:%M:%S") if agent.last_seen_at else "nunca"
+                mode = "simulación" if agent.dry_run else "real"
+                active = "🟢" if agent.is_active else "⚫"
+                lines.append(f"{active} `{agent.name}` · {mode} · último contacto {seen} UTC")
+        lines.extend(["", "*Últimos trabajos:*"])
+        if not jobs:
+            lines.append("Todavía no hay trabajos.")
+        else:
+            for job in jobs:
+                lines.append(
+                    f"• `{job.id[:8]}` · pedido #{job.order_id} · "
+                    f"{job.profile_name} · *{job.status}*"
+                )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+@admin_only
+async def cmd_tag_agent_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Etiqueta una unidad de stock Netflix para el agente."""
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /tagagent `<stock_id>`", parse_mode="Markdown"
+        )
+        return
+    try:
+        stock_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("stock_id debe ser numérico.")
+        return
+    with session_scope() as session:
+        item = session.get(StockItem, stock_id)
+        if not item:
+            await update.message.reply_text("Unidad de stock no encontrada.")
+            return
+        if item.is_sold:
+            await update.message.reply_text("Esa unidad de stock ya fue utilizada.")
+            return
+        if "netflix" not in item.plan.service.name.lower():
+            await update.message.reply_text("Solo puede etiquetarse stock de Netflix.")
+            return
+        item.tag = AUTOMATION_STOCK_TAG
+        plan_label = f"{item.plan.service.name} — {item.plan.name}"
+    await update.message.reply_text(
+        f"✅ Stock #{stock_id} preparado para el agente.\n{plan_label}"
+    )
+
+
+@admin_only
+async def cmd_agent_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Crea un trabajo controlado: /agentqueue pedido stock nombre [pin]."""
+    if len(context.args or []) < 3:
+        await update.message.reply_text(
+            "Uso: /agentqueue `<pedido_id>` `<stock_id>` `<nombre>` `[pin]`\n"
+            "Ejemplo: /agentqueue 15 8 Juan 4025",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        order_id, stock_id = int(context.args[0]), int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("pedido_id y stock_id deben ser numéricos.")
+        return
+    profile_name = context.args[2].strip()
+    profile_pin = context.args[3].strip() if len(context.args) > 3 else generate_profile_pin()
+    settings = _settings(context)
+    if not settings.agent_encryption_key:
+        await update.message.reply_text("Falta configurar AGENT_ENCRYPTION_KEY.")
+        return
+
+    with session_scope() as session:
+        order = get_order(session, order_id)
+        item = session.get(StockItem, stock_id)
+        if not order or not item:
+            await update.message.reply_text("Pedido o unidad de stock no encontrados.")
+            return
+        if order.status not in {
+            Order.STATUS_PENDING_PAYMENT,
+            Order.STATUS_AWAITING_REVIEW,
+            Order.STATUS_APPROVED,
+        }:
+            await update.message.reply_text(
+                f"El pedido no puede encolarse desde el estado {order.status}."
+            )
+            return
+        if item.plan_id != order.plan_id:
+            await update.message.reply_text(
+                "El stock no pertenece al mismo plan del pedido."
+            )
+            return
+        if item.is_sold and order.status != Order.STATUS_APPROVED:
+            await update.message.reply_text("La unidad de stock ya fue utilizada.")
+            return
+        try:
+            job = create_profile_job(
+                session,
+                order=order,
+                stock_item=item,
+                encryption_key=settings.agent_encryption_key,
+                profile_name=profile_name,
+                profile_pin=profile_pin,
+            )
+        except ValueError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        item.is_sold = True
+        job_id = job.id
+    await update.message.reply_text(
+        f"✅ Trabajo `{job_id}` agregado a la cola.\n"
+        f"Perfil: *{profile_name}*\n"
+        "El PIN quedó cifrado y no se mostrará en los registros.",
+        parse_mode="Markdown",
+    )
 
 
 @admin_only
