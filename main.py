@@ -17,6 +17,7 @@ from bot.db.database import init_db
 from bot.handlers import admin as admin_h
 from bot.handlers import catalog as catalog_h
 from bot.handlers import orders as orders_h
+from bot.handlers import netflix_admin as netflix_admin_h
 from bot.handlers import start as start_h
 from bot.jobs import (
     mark_expired_and_notify,
@@ -117,6 +118,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("maintenance", admin_h.cmd_maintenance))
     app.add_handler(CommandHandler("setpayment", admin_h.cmd_set_payment))
     app.add_handler(CommandHandler("setshop", admin_h.cmd_set_shop))
+
+    # Panel guiado Netflix (sin IDs ni comandos técnicos).
+    app.add_handler(netflix_admin_h.build_conversation())
 
     # Conversación para añadir stock (incluye /bulkstock).
     app.add_handler(admin_h.build_addstock_conversation())
