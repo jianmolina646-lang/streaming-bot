@@ -100,7 +100,7 @@ class NetflixAdapter:
                 page.set_default_timeout(10_000)
                 try:
                     self._ensure_login(page, job)
-                    self._create_profile_with_pin(page, job)
+                    profile_created = self._create_profile_with_pin(page, job)
                 except Exception:
                     try:
                         page.screenshot(
@@ -115,7 +115,7 @@ class NetflixAdapter:
                     message=f"Perfil {job.profile_name} verificado con PIN configurado.",
                     evidence={
                         "dry_run": False,
-                        "profile_created": True,
+                        "profile_created": profile_created,
                         "profile_name": job.profile_name,
                         "pin_configured": True,
                         "account_reference": job.account_reference,
@@ -216,13 +216,12 @@ class NetflixAdapter:
                 + (f" Mensaje: {detail}" if detail else "")
             )
 
-    def _create_profile_with_pin(self, page: Page, job: AgentJob) -> None:
+    def _create_profile_with_pin(self, page: Page, job: AgentJob) -> bool:
         page.goto("https://www.netflix.com/ManageProfiles", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
         if page.get_by_text(job.profile_name, exact=True).first.is_visible(timeout=1200):
-            raise NetflixFlowError(
-                f"El perfil {job.profile_name} ya existe; revisa su PIN manualmente."
-            )
+            self._set_profile_pin(page, job)
+            return False
         add = page.get_by_text(
             re.compile(r"(add profile|agregar perfil|añadir perfil)", re.I)
         ).first
@@ -260,14 +259,20 @@ class NetflixAdapter:
         except Exception:
             self._rollback_profile(page, job.profile_name)
             raise
+        return True
 
     def _set_profile_pin(self, page: Page, job: AgentJob) -> None:
-        page.goto("https://www.netflix.com/account", wait_until="domcontentloaded")
+        # Netflix 2026 ubica Profile Lock dentro de Manage profile and
+        # preferences, no en la antigua lista general de /account.
+        page.goto("https://www.netflix.com/ManageProfiles", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
         profile = page.get_by_text(job.profile_name, exact=True).first
         if not profile.is_visible(timeout=2500):
-            raise NetflixFlowError("El perfil fue creado, pero no apareció en la página Cuenta.")
+            raise NetflixFlowError(
+                "El perfil fue creado, pero no apareció en Administrar perfiles."
+            )
         profile.click()
+        page.wait_for_timeout(1200)
         lock = page.get_by_text(
             re.compile(r"(profile lock|bloqueo de perfil)", re.I)
         ).first
@@ -328,7 +333,7 @@ class NetflixAdapter:
             raise NetflixFlowError("No se encontró Guardar PIN.")
         save_pin.click()
         page.wait_for_timeout(1200)
-        page.goto("https://www.netflix.com/account", wait_until="domcontentloaded")
+        page.goto("https://www.netflix.com/ManageProfiles", wait_until="domcontentloaded")
         profile = page.get_by_text(job.profile_name, exact=True).first
         if not profile.is_visible(timeout=2200):
             raise NetflixFlowError("No fue posible verificar el perfil después de guardar el PIN.")
