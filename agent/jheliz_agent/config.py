@@ -27,6 +27,9 @@ class AgentConfig:
     headless: bool
     mail_control_url: str
     mail_control_token: str
+    allow_real_netflix: bool
+    browser_profile_dir: str
+    code_wait_seconds: int
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -40,6 +43,13 @@ class AgentConfig:
             headless=_boolean("JHELIZ_AGENT_HEADLESS", False),
             mail_control_url=os.getenv("MAIL_CONTROL_API_URL", "").strip().rstrip("/"),
             mail_control_token=os.getenv("MAIL_CONTROL_AGENT_TOKEN", "").strip(),
+            allow_real_netflix=_boolean("JHELIZ_AGENT_ALLOW_REAL_NETFLIX", False),
+            browser_profile_dir=os.getenv(
+                "JHELIZ_AGENT_BROWSER_PROFILE", "./browser-profile"
+            ).strip(),
+            code_wait_seconds=max(
+                30, min(300, int(os.getenv("JHELIZ_AGENT_CODE_WAIT_SECONDS", "180")))
+            ),
         )
         if not config.api_url.startswith("https://"):
             raise ValueError("JHELIZ_AGENT_API_URL debe utilizar HTTPS")

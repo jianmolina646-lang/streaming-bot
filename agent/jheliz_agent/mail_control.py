@@ -6,6 +6,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+import time
 
 from .config import AgentConfig
 from .models import AgentJob
@@ -45,3 +46,18 @@ class MailControlClient:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Mail Control respondió HTTP {exc.code}: {detail[:200]}") from exc
         return str(data["code"]) if data.get("status") == "found" else None
+
+    def wait_for_code(
+        self,
+        job: AgentJob,
+        *,
+        not_before: datetime,
+        timeout_seconds: int,
+    ) -> str | None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            code = self.claim_code(job, not_before=not_before)
+            if code:
+                return code
+            time.sleep(5)
+        return None

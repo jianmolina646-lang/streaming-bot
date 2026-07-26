@@ -34,6 +34,8 @@ class AgentTests(unittest.TestCase):
             name="test", dry_run=True, poll_seconds=5,
             browser="chromium", headless=False,
             mail_control_url="", mail_control_token="",
+            allow_real_netflix=False, browser_profile_dir="./test-profile",
+            code_wait_seconds=30,
         )
         result = NetflixAdapter(config).execute(AgentJob.from_payload(VALID_JOB))
         self.assertEqual(result.status, JobStatus.SUCCEEDED)
@@ -45,6 +47,8 @@ class AgentTests(unittest.TestCase):
             name="test", dry_run=False, poll_seconds=5,
             browser="chromium", headless=False,
             mail_control_url="", mail_control_token="",
+            allow_real_netflix=False, browser_profile_dir="./test-profile",
+            code_wait_seconds=30,
         )
         result = NetflixAdapter(config).execute(AgentJob.from_payload(VALID_JOB))
         self.assertEqual(result.status, JobStatus.NEEDS_ATTENTION)
