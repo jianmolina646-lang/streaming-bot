@@ -189,10 +189,18 @@ class NetflixAdapter:
             if submit_text.is_visible(timeout=1500):
                 submit = submit_text
         if submit is not None:
-            submit.click()
+            try:
+                submit.click(timeout=3000)
+            except PlaywrightTimeout:
+                # El formulario puede desaparecer mientras Netflix valida.
+                pass
         else:
-            # Algunos formularios no tienen botón accesible y responden a Enter.
-            code_input.press("Enter")
+            # El input puede desmontarse al validar; enviar Enter a la página
+            # evita depender de un elemento que Netflix acaba de reemplazar.
+            try:
+                page.keyboard.press("Enter")
+            except PlaywrightTimeout:
+                pass
         try:
             page.wait_for_url(re.compile(r"^(?!.*\/login).*$", re.I), timeout=12_000)
         except PlaywrightTimeout:
